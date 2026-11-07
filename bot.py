@@ -389,12 +389,12 @@ async def process_topup(message: types.Message, state: FSMContext):
         
     create_payment(message.from_user.id, invoice_id, amount)
     
-    # ИСПРАВЛЕНИЕ: Делаем ссылку кликабельной
+    # ИСПРАВЛЕНИЕ: Убираем reply_markup=main_kb() из edit_text, 
+    # так как редактировать ReplyKeyboardMarkup через edit_text нельзя!
     await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
         f"👉 <a href='{link}'>Оплатить по ссылке</a>\n\n"
         f"После оплаты баланс пополнится автоматически (в течение 1–2 минут).",
-        reply_markup=main_kb(),
         parse_mode="HTML"
     )
     
