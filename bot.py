@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Хранилище для фоновых задач, чтобы они не удалялись сборщиком мусора
+# Хранилище для фоновых задач
 bg_tasks = set()
 
 # ========== БАЗА ДАННЫХ ==========
@@ -203,6 +203,8 @@ class AdminStates(StatesGroup):
     waiting_product_stock = State()
     waiting_broadcast = State()
     waiting_ticket_reply = State()
+    waiting_balance_user_id = State() # Новое состояние
+    waiting_balance_amount = State()  # Новое состояние
 
 class UserStates(StatesGroup):
     waiting_support = State()
@@ -219,7 +221,8 @@ def main_kb():
 def admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Добавить товар"), KeyboardButton(text="📢 Рассылка")],
-        [KeyboardButton(text="🎫 Тикеты"), KeyboardButton(text="🔙 Выйти из админки")]
+        [KeyboardButton(text="💵 Выдать баланс"), KeyboardButton(text="🎫 Тикеты")],
+        [KeyboardButton(text="🔙 Выйти из админки")]
     ], resize_keyboard=True)
 
 def catalog_kb(products):
@@ -261,7 +264,6 @@ async def create_xrocket_invoice(amount, user_id):
                 inv_id = data.get("id") or data.get("data", {}).get("id")
                 links = data.get("links") or data.get("data", {}).get("links", {})
                 
-                # ИСПРАВЛЕНИЕ: Ищем telegramBotLink
                 pay_link = links.get("telegramBotLink") or links.get("web_url") or links.get("pay_url")
                 
                 return inv_id, pay_link
@@ -289,6 +291,7 @@ async def start(message: types.Message):
         "Добро пожаловать в магазин!\n\n"
         "🛍 Каталог — просмотр товаров\n"
         "👤 Профиль — баланс и история\n"
+        "💰 Пополнить — через XRocket (от 1$)\n"
         "🆘 Поддержка — связь с админом",
         reply_markup=main_kb()
     )
@@ -388,8 +391,6 @@ async def process_topup(message: types.Message, state: FSMContext):
         
     create_payment(message.from_user.id, invoice_id, amount)
     
-    # ИСПРАВЛЕНИЕ: Убираем reply_markup=main_kb() из edit_text, 
-    # так как редактировать ReplyKeyboardMarkup через edit_text нельзя!
     await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
         f"👉 <a href='{link}'>Оплатить по ссылке</a>\n\n"
@@ -402,7 +403,6 @@ async def process_topup(message: types.Message, state: FSMContext):
     task.add_done_callback(bg_tasks.discard)
 
 async def poll_payment(invoice_id, user_id, amount):
-    # 360 итераций по 5 секунд = 30 минут
     for _ in range(360):
         await asyncio.sleep(5)
         status = await check_xrocket_payment(invoice_id)
@@ -410,7 +410,7 @@ async def poll_payment(invoice_id, user_id, amount):
         if status == "paid":
             payment = get_payment(invoice_id)
             if payment and payment[4] == "paid":
-                return # Защита от двойного начисления
+                return 
                 
             complete_payment(invoice_id)
             update_balance(user_id, amount)
@@ -501,6 +501,63 @@ async def add_product_stock(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer(f"✅ Товар «{data['name']}» добавлен!", reply_markup=admin_kb())
 
+# ========== ВЫДАЧА БАЛАНСА АДМИНОМ ==========
+@dp.message(F.text == "💵 Выдать баланс")
+async def admin_give_balance_start(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    await message.answer("Введите Telegram ID пользователя, которому нужно выдать баланс:")
+    await state.set_state(AdminStates.waiting_balance_user_id)
+
+@dp.message(AdminStates.waiting_balance_user_id)
+async def admin_give_balance_user(message: types.Message, state: FSMContext):
+    try:
+        target_id = int(message.text)
+    except ValueError:
+        await message.answer("ID должен состоять только из цифр. Попробуйте снова:")
+        return
+        
+    user = get_user(target_id)
+    if not user:
+        await message.answer("Пользователь с таким ID не найден в базе. Убедитесь, что он запускал бота.")
+        await state.clear()
+        return
+
+    await state.update_data(target_id=target_id)
+    await message.answer(f"Пользователь найден. Его текущий баланс: {user[2]:.2f}$\nВведите сумму для выдачи:")
+    await state.set_state(AdminStates.waiting_balance_amount)
+
+@dp.message(AdminStates.waiting_balance_amount)
+async def admin_give_balance_amount(message: types.Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount <= 0:
+            await message.answer("Сумма должна быть больше нуля.")
+            return
+    except ValueError:
+        await message.answer("Введите число.")
+        return
+
+    data = await state.get_data()
+    target_id = data["target_id"]
+    
+    update_balance(target_id, amount)
+    updated_user = get_user(target_id)
+    
+    await message.answer(
+        f"✅ Баланс пользователя {target_id} успешно пополнен на {amount:.2f}$.\n"
+        f"Новый баланс: {updated_user[2]:.2f}$",
+        reply_markup=admin_kb()
+    )
+    await state.clear()
+    
+    # Уведомляем пользователя (опционально)
+    try:
+        await bot.send_message(target_id, f"💰 Вам зачислен баланс: +{amount:.2f}$!\nТекущий баланс: {updated_user[2]:.2f}$")
+    except:
+        pass
+
+# ========== ОСТАЛЬНАЯ АДМИНКА ==========
 @dp.message(F.text == "📢 Рассылка")
 async def broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
