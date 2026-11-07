@@ -1,6 +1,4 @@
-# bot.py — магазин с каталогом, балансом, XRocket, тикетами и админкой
-# Установка: pip install aiogram aiohttp python-dotenv
-# Запуск: python bot.py
+# bot.py — магазин с каталогом, балансом, XRocket (Invoices), тикетами и админкой
 
 import asyncio
 import sqlite3
@@ -21,9 +19,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 XROCKET_API_KEY = os.getenv("XROCKET_API_KEY")
-XROCKET_API_URL = os.getenv("XROCKET_API_URL", "https://pay.xrocket.app/api/v1")
+XROCKET_API_URL = os.getenv("XROCKET_API_URL", "https://pay.api.xrocket.exchange/api/v1")
 DB_PATH = os.getenv("DB_PATH", "shop.db")
-CALLBACK_URL = os.getenv("CALLBACK_URL", "")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 
 if not BOT_TOKEN:
@@ -35,6 +32,9 @@ logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+
+# Хранилище для фоновых задач, чтобы они не удалялись сборщиком мусора
+bg_tasks = set()
 
 # ========== БАЗА ДАННЫХ ==========
 def init_db():
@@ -233,28 +233,51 @@ def catalog_kb(products):
 
 # ========== XROCKET API ==========
 async def create_xrocket_invoice(amount, user_id):
-    headers = {"Rocket-Pay-Key": XROCKET_API_KEY, "Content-Type": "application/json"}
-    payload = {
-        "amount": amount,
-        "currency": "USD",
-        "description": f"Пополнение баланса для {user_id}",
-        "hidden_message": f"user_{user_id}",
-        "callback_url": CALLBACK_URL
+    url = f"{XROCKET_API_URL}/invoices"
+    
+    headers = {
+        "Authorization": f"Bearer {XROCKET_API_KEY}",
+        "Content-Type": "application/json"
     }
+    
+    # Данные строго по документации xRocket
+    payload = {
+        "priceAmount": f"{amount:.2f}",
+        "priceCurrency": "USDT",
+        "payCurrencies": ["USDT"],
+        "numPayments": 1,
+        "clientInvoiceId": f"user_{user_id}_{int(datetime.now().timestamp())}",
+        "description": f"Top-up for user {user_id}",
+        "expiresIn": 1800000  # 30 минут
+    }
+
     async with aiohttp.ClientSession() as session:
-        async with session.post(f"{XROCKET_API_URL}/invoice", json=payload, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                return data.get("data", {}).get("id"), data.get("data", {}).get("link")
-            return None, None
+        async with session.post(url, json=payload, headers=headers) as resp:
+            data = await resp.json()
+            if resp.status in (200, 201):
+                # Извлекаем ID инвойса (на скриншоте он в корне или в data)
+                inv_id = data.get("id") or data.get("data", {}).get("id")
+                
+                # Извлекаем ссылку на оплату из объекта links
+                links = data.get("links") or data.get("data", {}).get("links", {})
+                # Обычно это web_url или pay_url
+                pay_link = links.get("web_url") or links.get("pay_url") or links.get("payment_url")
+                
+                return inv_id, pay_link
+            else:
+                logging.error(f"XRocket Create Invoice Error: {resp.status} - {data}")
+                return None, None
 
 async def check_xrocket_payment(invoice_id):
-    headers = {"Rocket-Pay-Key": XROCKET_API_KEY}
+    url = f"{XROCKET_API_URL}/invoices/{invoice_id}"
+    headers = {"Authorization": f"Bearer {XROCKET_API_KEY}"}
+    
     async with aiohttp.ClientSession() as session:
-        async with session.get(f"{XROCKET_API_URL}/invoice/{invoice_id}", headers=headers) as resp:
+        async with session.get(url, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                return data.get("data", {}).get("status")
+                status = data.get("status") or data.get("data", {}).get("status")
+                return status
             return None
 
 # ========== ОБРАБОТЧИКИ ==========
@@ -314,9 +337,11 @@ async def buy_product(callback: types.CallbackQuery):
     c.execute("SELECT * FROM products WHERE id = ?", (product_id,))
     product = c.fetchone()
     conn.close()
+    
     if not product:
         await callback.answer("Товар не найден", show_alert=True)
         return
+        
     user = get_user(callback.from_user.id)
     if user[2] < product[3]:
         await callback.answer(
@@ -324,13 +349,16 @@ async def buy_product(callback: types.CallbackQuery):
             show_alert=True
         )
         return
+        
     update_balance(callback.from_user.id, -product[3])
     add_purchase(callback.from_user.id, product[0], product[1], product[3])
+    
+    updated_user = get_user(callback.from_user.id)
     await callback.message.edit_text(
         f"✅ Покупка совершена!\n\n"
         f"Товар: {product[1]}\n"
         f"Цена: {product[3]:.2f}$\n"
-        f"Остаток баланса: {get_user(callback.from_user.id)[2]:.2f}$"
+        f"Остаток баланса: {updated_user[2]:.2f}$"
     )
 
 @dp.message(F.text == "💰 Пополнить")
@@ -348,32 +376,58 @@ async def process_topup(message: types.Message, state: FSMContext):
     except ValueError:
         await message.answer("Введите число (например: 5 или 10.5):")
         return
+        
     await state.clear()
+    
+    # Отправляем сообщение об ожидании, так как запрос к API может занять секунду
+    wait_msg = await message.answer("⏳ Создаем счет для оплаты...")
+    
     invoice_id, link = await create_xrocket_invoice(amount, message.from_user.id)
-    if not invoice_id:
-        await message.answer("Ошибка создания счёта. Попробуйте позже.")
+    
+    if not invoice_id or not link:
+        await wait_msg.edit_text("❌ Ошибка создания счёта. Попробуйте позже.")
         return
+        
     create_payment(message.from_user.id, invoice_id, amount)
-    await message.answer(
+    
+    await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
         f"Оплатите по ссылке: {link}\n\n"
         f"После оплаты баланс пополнится автоматически (в течение 1–2 минут).",
         reply_markup=main_kb()
     )
-    asyncio.create_task(poll_payment(invoice_id, message.from_user.id, amount))
+    
+    # Запускаем фоновую задачу с сохранением ссылки на нее
+    task = asyncio.create_task(poll_payment(invoice_id, message.from_user.id, amount))
+    bg_tasks.add(task)
+    task.add_done_callback(bg_tasks.discard)
 
 async def poll_payment(invoice_id, user_id, amount):
-    for _ in range(60):
+    # 360 итераций по 5 секунд = 30 минут (время жизни инвойса)
+    for _ in range(360):
         await asyncio.sleep(5)
         status = await check_xrocket_payment(invoice_id)
+        
         if status == "paid":
+            # Защита от двойного начисления
+            payment = get_payment(invoice_id)
+            if payment and payment[4] == "paid":
+                return
+                
             complete_payment(invoice_id)
             update_balance(user_id, amount)
+            
+            user = get_user(user_id)
             await bot.send_message(
                 user_id,
-                f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {get_user(user_id)[2]:.2f}$"
+                f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$"
             )
             return
+            
+        elif status in ("expired", "cancelled"):
+            await bot.send_message(user_id, "❌ Время ожидания оплаты истекло. Создайте новый счёт.")
+            return
+            
     await bot.send_message(user_id, "⏰ Время ожидания оплаты истекло. Если вы оплатили — обратитесь в поддержку.")
 
 @dp.message(F.text == "🆘 Поддержка")
@@ -461,6 +515,7 @@ async def broadcast_send(message: types.Message, state: FSMContext):
     await state.clear()
     users = get_all_users()
     success = 0
+    await message.answer(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
     for uid in users:
         try:
             await bot.send_message(uid, message.text)
@@ -514,8 +569,11 @@ async def exit_admin(message: types.Message):
 # ========== ЗАПУСК ==========
 async def main():
     init_db()
-    print("[*] Бот запущен")
+    print("[*] Бот запущен и готов к работе")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Бот остановлен")
