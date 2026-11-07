@@ -252,24 +252,34 @@ async def create_xrocket_invoice(amount, user_id):
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
-            raw_text = await resp.text()
-            
-            # ЭТА СТРОКА ВЫВЕДЕТ ОШИБКУ В ЛОГИ DOCKER
-            print(f"\n--- ОТВЕТ ОТ XROCKET ---\nСтатус: {resp.status}\nТело: {raw_text}\n------------------------\n")
-            logging.info(f"XRocket response: {resp.status} - {raw_text}")
-
             try:
                 data = await resp.json()
             except Exception:
-                data = {}
+                return None, None
 
             if resp.status in (200, 201):
                 inv_id = data.get("id") or data.get("data", {}).get("id")
                 links = data.get("links") or data.get("data", {}).get("links", {})
-                pay_link = links.get("web_url") or links.get("pay_url") or links.get("bot_invoice_url")
+                
+                # ИСПРАВЛЕНИЕ: Ищем telegramBotLink
+                pay_link = links.get("telegramBotLink") or links.get("web_url") or links.get("pay_url")
+                
                 return inv_id, pay_link
             else:
+                logging.error(f"XRocket Create Error: {resp.status} - {data}")
                 return None, None
+
+async def check_xrocket_payment(invoice_id):
+    url = f"{XROCKET_API_URL}/invoices/{invoice_id}"
+    headers = {"Authorization": f"Bearer {XROCKET_API_KEY}"}
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                status = data.get("status") or data.get("data", {}).get("status")
+                return status
+            return None
 
 # ========== ОБРАБОТЧИКИ ==========
 @dp.message(CommandStart())
@@ -369,8 +379,6 @@ async def process_topup(message: types.Message, state: FSMContext):
         return
         
     await state.clear()
-    
-    # Отправляем сообщение об ожидании, так как запрос к API может занять секунду
     wait_msg = await message.answer("⏳ Создаем счет для оплаты...")
     
     invoice_id, link = await create_xrocket_invoice(amount, message.from_user.id)
@@ -381,29 +389,29 @@ async def process_topup(message: types.Message, state: FSMContext):
         
     create_payment(message.from_user.id, invoice_id, amount)
     
+    # ИСПРАВЛЕНИЕ: Делаем ссылку кликабельной
     await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
-        f"Оплатите по ссылке: {link}\n\n"
+        f"👉 <a href='{link}'>Оплатить по ссылке</a>\n\n"
         f"После оплаты баланс пополнится автоматически (в течение 1–2 минут).",
-        reply_markup=main_kb()
+        reply_markup=main_kb(),
+        parse_mode="HTML"
     )
     
-    # Запускаем фоновую задачу с сохранением ссылки на нее
     task = asyncio.create_task(poll_payment(invoice_id, message.from_user.id, amount))
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
 
 async def poll_payment(invoice_id, user_id, amount):
-    # 360 итераций по 5 секунд = 30 минут (время жизни инвойса)
+    # 360 итераций по 5 секунд = 30 минут
     for _ in range(360):
         await asyncio.sleep(5)
         status = await check_xrocket_payment(invoice_id)
         
         if status == "paid":
-            # Защита от двойного начисления
             payment = get_payment(invoice_id)
             if payment and payment[4] == "paid":
-                return
+                return # Защита от двойного начисления
                 
             complete_payment(invoice_id)
             update_balance(user_id, amount)
