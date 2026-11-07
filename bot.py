@@ -240,45 +240,36 @@ async def create_xrocket_invoice(amount, user_id):
         "Content-Type": "application/json"
     }
     
-    # Данные строго по документации xRocket
     payload = {
         "priceAmount": f"{amount:.2f}",
-        "priceCurrency": "USDT",
+        "priceCurrency": "USDT", 
         "payCurrencies": ["USDT"],
         "numPayments": 1,
         "clientInvoiceId": f"user_{user_id}_{int(datetime.now().timestamp())}",
         "description": f"Top-up for user {user_id}",
-        "expiresIn": 1800000  # 30 минут
+        "expiresIn": 1800000
     }
 
     async with aiohttp.ClientSession() as session:
         async with session.post(url, json=payload, headers=headers) as resp:
-            data = await resp.json()
+            raw_text = await resp.text()
+            
+            # ЭТА СТРОКА ВЫВЕДЕТ ОШИБКУ В ЛОГИ DOCKER
+            print(f"\n--- ОТВЕТ ОТ XROCKET ---\nСтатус: {resp.status}\nТело: {raw_text}\n------------------------\n")
+            logging.info(f"XRocket response: {resp.status} - {raw_text}")
+
+            try:
+                data = await resp.json()
+            except Exception:
+                data = {}
+
             if resp.status in (200, 201):
-                # Извлекаем ID инвойса (на скриншоте он в корне или в data)
                 inv_id = data.get("id") or data.get("data", {}).get("id")
-                
-                # Извлекаем ссылку на оплату из объекта links
                 links = data.get("links") or data.get("data", {}).get("links", {})
-                # Обычно это web_url или pay_url
-                pay_link = links.get("web_url") or links.get("pay_url") or links.get("payment_url")
-                
+                pay_link = links.get("web_url") or links.get("pay_url") or links.get("bot_invoice_url")
                 return inv_id, pay_link
             else:
-                logging.error(f"XRocket Create Invoice Error: {resp.status} - {data}")
                 return None, None
-
-async def check_xrocket_payment(invoice_id):
-    url = f"{XROCKET_API_URL}/invoices/{invoice_id}"
-    headers = {"Authorization": f"Bearer {XROCKET_API_KEY}"}
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                status = data.get("status") or data.get("data", {}).get("status")
-                return status
-            return None
 
 # ========== ОБРАБОТЧИКИ ==========
 @dp.message(CommandStart())
