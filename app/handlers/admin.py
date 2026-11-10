@@ -1,6 +1,6 @@
 import asyncio
 from aiogram import Router, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -16,15 +16,18 @@ router = Router()
 bot = None
 
 @router.message(Command("admin"))
-async def admin_panel(message: types.Message):
+async def admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ Доступ запрещён.")
         return
+    await state.clear() # Сбрасываем возможные зависшие состояния
     await message.answer("🔧 Админ-панель:", reply_markup=admin_kb())
 
-@router.message(F.text == "➕ Добавить товар")
+# ДОБАВЛЕН StateFilter("*") ко всем кнопкам!
+@router.message(F.text == "➕ Добавить товар", StateFilter("*"))
 async def add_product_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
+    await state.clear() # Очищаем старое состояние
     await message.answer("Введите название товара:")
     await state.set_state(AdminStates.waiting_product_name)
 
@@ -100,9 +103,10 @@ async def add_product_stock(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Товар «{data['name']}» добавлен!", reply_markup=admin_kb())
 
 # ========== УДАЛЕНИЕ ТОВАРА ==========
-@router.message(F.text == "🗑 Удалить товар")
-async def admin_delete_product_start(message: types.Message):
+@router.message(F.text == "🗑 Удалить товар", StateFilter("*"))
+async def admin_delete_product_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
+    await state.clear()
         
     products = get_all_products_for_admin() 
     
@@ -150,9 +154,10 @@ async def admin_delete_product_cancel(callback: types.CallbackQuery):
     await callback.message.edit_text("Удаление отменено.")
 # ==================================
 
-@router.message(F.text == "💵 Выдать баланс")
+@router.message(F.text == "💵 Выдать баланс", StateFilter("*"))
 async def admin_give_balance_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
+    await state.clear()
     await message.answer("Введите Telegram ID пользователя, которому нужно выдать баланс:")
     await state.set_state(AdminStates.waiting_balance_user_id)
 
@@ -204,9 +209,10 @@ async def admin_give_balance_amount(message: types.Message, state: FSMContext):
         except:
             pass
 
-@router.message(F.text == "📢 Рассылка")
+@router.message(F.text == "📢 Рассылка", StateFilter("*"))
 async def broadcast_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
+    await state.clear()
     await message.answer("Введите текст для рассылки всем пользователям:")
     await state.set_state(AdminStates.waiting_broadcast)
 
@@ -251,9 +257,10 @@ async def process_broadcast(bot_instance, text, admin_id, users):
     except:
         pass
 
-@router.message(F.text == "🎫 Тикеты")
-async def list_tickets(message: types.Message):
+@router.message(F.text == "🎫 Тикеты", StateFilter("*"))
+async def list_tickets(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
+    await state.clear()
     tickets = get_tickets('open')
     if not tickets:
         await message.answer("Нет открытых тикетов.")
@@ -289,6 +296,7 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
     await message.answer("✅ Ответ отправлен.", reply_markup=admin_kb())
     await state.clear()
 
-@router.message(F.text == "🔙 Выйти из админки")
-async def exit_admin(message: types.Message):
+@router.message(F.text == "🔙 Выйти из админки", StateFilter("*"))
+async def exit_admin(message: types.Message, state: FSMContext):
+    await state.clear()
     await message.answer("Главное меню:", reply_markup=main_kb())

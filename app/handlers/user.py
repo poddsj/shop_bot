@@ -1,6 +1,6 @@
 import asyncio
 from aiogram import Router, types, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -18,7 +18,8 @@ bot = None
 bg_tasks = set()
 
 @router.message(CommandStart())
-async def start(message: types.Message):
+async def start(message: types.Message, state: FSMContext):
+    await state.clear()
     register_user(message.from_user.id, message.from_user.username or "unknown")
     await message.answer(
         "Добро пожаловать в магазин!\n\n"
@@ -27,8 +28,9 @@ async def start(message: types.Message):
         reply_markup=main_kb()
     )
 
-@router.message(F.text == "👤 Профиль")
-async def profile(message: types.Message):
+@router.message(F.text == "👤 Профиль", StateFilter("*"))
+async def profile(message: types.Message, state: FSMContext):
+    await state.clear()
     user = get_user(message.from_user.id)
     if not user:
         await message.answer("Ошибка: пользователь не найден.")
@@ -44,8 +46,9 @@ async def profile(message: types.Message):
         reply_markup=main_kb()
     )
 
-@router.message(F.text == "📦 Мои покупки")
-async def my_purchases(message: types.Message):
+@router.message(F.text == "📦 Мои покупки", StateFilter("*"))
+async def my_purchases(message: types.Message, state: FSMContext):
+    await state.clear()
     purchases = get_purchases(message.from_user.id)
     if not purchases:
         await message.answer("У вас пока нет покупок.")
@@ -55,8 +58,9 @@ async def my_purchases(message: types.Message):
     )
     await message.answer(text)
 
-@router.message(F.text == "🛍 Каталог")
-async def catalog(message: types.Message):
+@router.message(F.text == "🛍 Каталог", StateFilter("*"))
+async def catalog(message: types.Message, state: FSMContext):
+    await state.clear()
     products = get_products()
     if not products:
         await message.answer("Каталог пуст. Загляните позже!")
@@ -123,33 +127,32 @@ async def confirm_buy(callback: types.CallbackQuery):
     elif product[6] == "text":
         await bot.send_message(callback.from_user.id, f"✅ Спасибо за покупку!\n\nТовар: {product[1]}\n\nВаш товар:\n{product[5]}")
 
-@router.message(F.text == "💰 Пополнить")
+@router.message(F.text == "💰 Пополнить", StateFilter("*"))
 async def topup(message: types.Message, state: FSMContext):
-    await message.answer("Введите сумму пополнения в USD (минимум 0.01$):")
+    await state.clear()
+    await message.answer("Введите сумму пополнения в USD (минимум 1$):")
     await state.set_state(UserStates.waiting_topup_amount)
 
 @router.message(UserStates.waiting_topup_amount)
 async def process_topup(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount < 0.01:
-            await message.answer("Минимальная сумма — 0.01$. Попробуйте снова:")
+        if amount < 1: # Изменено с 0.01 на 1
+            await message.answer("Минимальная сумма — 1$. Попробуйте снова:")
             return
     except ValueError:
-        await message.answer("Введите число (например: 0.5 или 10):")
+        await message.answer("Введите число (например: 5 или 10):")
         return
         
     await state.clear()
     wait_msg = await message.answer("⏳ Создаем счет для оплаты...")
     
-    # Теперь функция возвращает 3 значения
     invoice_id, client_inv_id, link = await create_xrocket_invoice(amount, message.from_user.id)
     
     if not invoice_id or not link:
         await wait_msg.edit_text("❌ Ошибка создания счёта. Попробуйте позже.")
         return
         
-    # Сохраняем в БД (теперь с client_inv_id)
     create_payment(message.from_user.id, invoice_id, client_inv_id, amount)
     
     await wait_msg.edit_text(
@@ -167,7 +170,6 @@ async def process_topup(message: types.Message, state: FSMContext):
 @router.callback_query(F.data.startswith("check_pay_"))
 async def manual_check_payment(callback: types.CallbackQuery):
     invoice_id = callback.data.replace("check_pay_", "").strip()
-    
     await callback.answer("Проверяем...")
     
     payment = get_payment(invoice_id)
@@ -175,13 +177,11 @@ async def manual_check_payment(callback: types.CallbackQuery):
         await callback.message.answer("❌ Ошибка: Платёж не найден.")
         return
         
-    # Индекс 5 — это статус (из-за новой колонки client_invoice_id)
     if payment[5] == "paid": 
         await callback.message.delete()
         await callback.message.answer("✅ Этот платёж уже был зачислен ранее!", reply_markup=main_kb())
         return
 
-    # Индекс 3 — это client_invoice_id
     client_inv_id = payment[3]
     
     status = "unknown"
@@ -192,8 +192,8 @@ async def manual_check_payment(callback: types.CallbackQuery):
         await asyncio.sleep(2)
         
     if status == "paid":
-        amount = payment[4] # Индекс 4 - это amount
-        user_id = payment[1] # Индекс 1 - это user_id
+        amount = payment[4] 
+        user_id = payment[1] 
         
         complete_payment(invoice_id)
         update_balance(user_id, amount)
@@ -219,7 +219,7 @@ async def poll_payment(invoice_id, client_inv_id, user_id, amount):
         
         if status == "paid":
             payment = get_payment(invoice_id)
-            if payment and payment[5] == "paid": # Проверка на дубль
+            if payment and payment[5] == "paid": 
                 return 
                 
             complete_payment(invoice_id)
@@ -241,8 +241,9 @@ async def poll_payment(invoice_id, client_inv_id, user_id, amount):
     if bot:
         await bot.send_message(user_id, "⏰ Время ожидания оплаты истекло. Если вы оплатили — обратитесь в поддержку.")
 
-@router.message(F.text == "🆘 Поддержка")
+@router.message(F.text == "🆘 Поддержка", StateFilter("*"))
 async def support(message: types.Message, state: FSMContext):
+    await state.clear()
     await message.answer("Опишите вашу проблему — админ ответит вам в этом чате:")
     await state.set_state(UserStates.waiting_support)
 
