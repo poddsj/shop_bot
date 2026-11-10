@@ -167,8 +167,8 @@ async def process_topup(message: types.Message, state: FSMContext):
 async def manual_check_payment(callback: types.CallbackQuery):
     invoice_id = callback.data.split("_")[2]
     
-    # Отвечаем на колбэк, чтобы кнопка не висела
-    await callback.answer("⏳ Проверяем...")
+    # Отвечаем сразу, чтобы кнопка не висела (не более 3 сек)
+    await callback.answer("Проверяем...")
     
     payment = get_payment(invoice_id)
     if payment and payment[4] == "paid":
@@ -176,7 +176,7 @@ async def manual_check_payment(callback: types.CallbackQuery):
         await callback.message.answer("✅ Этот платёж уже был зачислен ранее!", reply_markup=main_kb())
         return
 
-    # Опрашиваем 5 раз по 2 секунды (ждем 10 сек, пока xRocket обновит статус)
+    # Опрашиваем API 5 раз (ждем 10 секунд)
     status = "unknown"
     for _ in range(5):
         status = await check_xrocket_payment(invoice_id)
@@ -199,8 +199,14 @@ async def manual_check_payment(callback: types.CallbackQuery):
             reply_markup=main_kb()
         )
     else:
-        # ВЫВОДИМ СТАТУС В ЧАТ (чтобы вы увидели, почему xRocket не дает оплату)
-        await callback.answer(f"❌ Не оплачено. Статус API: {status}", show_alert=True)
+        # Отправляем ОБЫЧНОЕ СООБЩЕНИЕ, а не всплывающее окно
+        await callback.message.answer(
+            f"❌ Оплата пока не найдена.\nСтатус от xRocket: <code>{status}</code>\n\n"
+            f"Если вы точно оплатили, подождите 1-2 минуты. Бот сам пришлет уведомление, когда платеж пройдет.",
+            parse_mode="HTML"
+        )
+
+
 # ЕДИНАЯ ЛОГИКА ЗАЧИСЛЕНИЯ (ДЛЯ ТАЙМЕРА)
 async def process_successful_payment(invoice_id, user_id, amount):
     payment = get_payment(invoice_id)

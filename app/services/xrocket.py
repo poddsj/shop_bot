@@ -44,13 +44,14 @@ async def check_xrocket_payment(invoice_id):
             if resp.status == 200:
                 data = await resp.json()
                 
-                # Вытаскиваем статус (проверяем разные варианты названий)
+                # ВЫВОДИМ СЫРОЙ ОТВЕТ В ЛОГИ (вы увидите его в Bothost)
+                logging.info(f"XRocket Check Invoice: {data}")
+                
+                # Ищем статус везде, где только можно
                 status = data.get("status") or data.get("state") or data.get("data", {}).get("status") or data.get("data", {}).get("state")
                 
-                # Если статус "completed" или "paid" - считаем оплаченным
-                if status in ("completed", "paid"):
+                # Возвращаем статус. Если нашли "paid" или "completed", приводим к "paid"
+                if status in ("paid", "completed"):
                     return "paid"
-                
-                # Возвращаем то, что есть (active, expired и т.д.), чтобы бот мог показать это пользователю
-                return str(status)
-            return f"HTTP_ERROR_{resp.status}"
+                return str(status) # Вернет "active", "pending" и т.д.
+            return f"HTTP_{resp.status}"
