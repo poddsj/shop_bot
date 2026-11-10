@@ -163,33 +163,28 @@ async def process_topup(message: types.Message, state: FSMContext):
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
 
-# НОВЫЙ ОБРАБОТЧИК ДЛЯ КНОПКИ "Я ОПЛАТИЛ"
 @router.callback_query(F.data.startswith("check_pay_"))
 async def manual_check_payment(callback: types.CallbackQuery):
     invoice_id = callback.data.split("_")[2]
     
-    # Сразу отвечаем на колбэк, чтобы кнопка не "крутилась" бесконечно
-    await callback.answer("⏳ Проверяем поступление оплаты, подождите...")
+    # Отвечаем на колбэк, чтобы кнопка не висела
+    await callback.answer("⏳ Проверяем...")
     
-    # Проверяем, не зачислен ли уже
     payment = get_payment(invoice_id)
     if payment and payment[4] == "paid":
         await callback.message.delete()
-        await callback.message.answer("Этот платёж уже был зачислен ранее!")
+        await callback.message.answer("✅ Этот платёж уже был зачислен ранее!", reply_markup=main_kb())
         return
 
-    # Делаем до 5 попыток проверки с интервалом 2 секунды (всего 10 секунд)
-    success = False
+    # Опрашиваем 5 раз по 2 секунды (ждем 10 сек, пока xRocket обновит статус)
     status = "unknown"
-    
     for _ in range(5):
         status = await check_xrocket_payment(invoice_id)
         if status == "paid":
-            success = True
             break
         await asyncio.sleep(2)
         
-    if success:
+    if status == "paid":
         amount = payment[3] if payment else 0
         user_id = payment[1] if payment else 0
         
@@ -204,8 +199,8 @@ async def manual_check_payment(callback: types.CallbackQuery):
             reply_markup=main_kb()
         )
     else:
-        # Если оплата не найдена - показываем статус, который вернул xRocket
-        await callback.answer(f"❌ Оплата не найдена. Статус xRocket: {status}", show_alert=True)
+        # ВЫВОДИМ СТАТУС В ЧАТ (чтобы вы увидели, почему xRocket не дает оплату)
+        await callback.answer(f"❌ Не оплачено. Статус API: {status}", show_alert=True)
 # ЕДИНАЯ ЛОГИКА ЗАЧИСЛЕНИЯ (ДЛЯ ТАЙМЕРА)
 async def process_successful_payment(invoice_id, user_id, amount):
     payment = get_payment(invoice_id)
