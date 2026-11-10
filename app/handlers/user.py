@@ -168,17 +168,28 @@ async def process_topup(message: types.Message, state: FSMContext):
 async def manual_check_payment(callback: types.CallbackQuery):
     invoice_id = callback.data.split("_")[2]
     
-    # Проверяем статус через API
-    status = await check_xrocket_payment(invoice_id)
+    # Сразу отвечаем на колбэк, чтобы кнопка не "крутилась" бесконечно
+    await callback.answer("⏳ Проверяем поступление оплаты, подождите...")
     
-    if status == "paid":
-        # Проверяем, не зачислен ли уже
-        payment = get_payment(invoice_id)
-        if payment and payment[4] == "paid":
-            await callback.answer("Этот платёж уже был зачислен ранее!", show_alert=True)
-            await callback.message.delete()
-            return
-            
+    # Проверяем, не зачислен ли уже
+    payment = get_payment(invoice_id)
+    if payment and payment[4] == "paid":
+        await callback.message.delete()
+        await callback.message.answer("Этот платёж уже был зачислен ранее!")
+        return
+
+    # Делаем до 5 попыток проверки с интервалом 2 секунды (всего 10 секунд)
+    success = False
+    status = "unknown"
+    
+    for _ in range(5):
+        status = await check_xrocket_payment(invoice_id)
+        if status == "paid":
+            success = True
+            break
+        await asyncio.sleep(2)
+        
+    if success:
         amount = payment[3] if payment else 0
         user_id = payment[1] if payment else 0
         
@@ -193,8 +204,8 @@ async def manual_check_payment(callback: types.CallbackQuery):
             reply_markup=main_kb()
         )
     else:
-        await callback.answer("❌ Оплата ещё не поступила. Подождите немного или оплатите счёт.", show_alert=True)
-
+        # Если оплата не найдена - показываем статус, который вернул xRocket
+        await callback.answer(f"❌ Оплата не найдена. Статус xRocket: {status}", show_alert=True)
 # ЕДИНАЯ ЛОГИКА ЗАЧИСЛЕНИЯ (ДЛЯ ТАЙМЕРА)
 async def process_successful_payment(invoice_id, user_id, amount):
     payment = get_payment(invoice_id)
