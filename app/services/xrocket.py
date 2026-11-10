@@ -41,6 +41,7 @@ async def create_xrocket_invoice(amount, user_id):
 async def check_xrocket_payment(invoice_id, client_invoice_id=None):
     headers = {"Authorization": f"Bearer {XROCKET_API_KEY}"}
     
+    # 1. Пробуем найти по ID
     url = f"{XROCKET_API_URL}/invoices/{invoice_id}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as resp:
@@ -51,30 +52,27 @@ async def check_xrocket_payment(invoice_id, client_invoice_id=None):
                     return "paid"
                 return str(status)
             
+            # 2. Если 404, ищем в списке
             if resp.status == 404:
-                # Если не нашли по ID, запрашиваем список
                 list_url = f"{XROCKET_API_URL}/invoices?limit=20"
                 async with session.get(list_url, headers=headers) as resp_list:
                     if resp_list.status == 200:
                         data_list = await resp_list.json()
-                        items = data_list.get("data", []) if isinstance(data_list, dict) else data_list
                         
-                        # Если список пустой или это не список — возвращаем отладочную инфу
-                        if not items or not isinstance(items, list):
-                            return f"DEBUG_LIST_EMPTY: {str(data_list)[:50]}"
+                        # ИСПРАВЛЕНИЕ: Берем ключ "items"
+                        items = data_list.get("items", [])
                         
-                        # Ищем наш инвойс в списке
                         for item in items:
-                            # Сравниваем и по ID, и по clientInvoiceId
+                            # Сравниваем ID
                             if str(item.get("id")) == str(invoice_id) or item.get("clientInvoiceId") == client_invoice_id:
                                 status = item.get("status") or item.get("state")
+                                # Если нашли, проверяем статус
                                 if status in ("paid", "completed"):
                                     return "paid"
-                                return str(status)
+                                return str(status) # Вернет "active" или "pending", если еще не оплачен
                         
-                        # Если ничего не нашли, выводим первые 3 элемента списка для отладки
-                        debug_info = f"NOT_FOUND. Recent: {items[0].get('id')} ({items[0].get('status')})"
-                        return debug_info
+                        # Если прошлись по списку и не нашли
+                        return "not_found_in_list"
                     else:
                         return f"LIST_ERROR_{resp_list.status}"
             return f"HTTP_{resp.status}"
