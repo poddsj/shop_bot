@@ -1,9 +1,11 @@
 import asyncio
 import logging
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.config import BOT_TOKEN
+from app.config import BOT_TOKEN, ADMIN_IDS
 from app.database import init_db
 from app.handlers import user, admin
 
@@ -24,6 +26,18 @@ async def main():
     admin_module.bot = bot
     
     dp = Dispatcher(storage=MemoryStorage())
+    
+    # --- ДОБАВЛЯЕМ КОМАНДУ /getdb ЗДЕСЬ ---
+    @dp.message(Command("getdb"))
+    async def get_database(message: types.Message):
+        if message.from_user.id not in ADMIN_IDS:
+            return
+        try:
+            db_file = FSInputFile("data/shop.db")
+            await message.answer_document(db_file, caption="📁 Актуальная база данных магазина")
+        except Exception as e:
+            await message.answer(f"❌ Ошибка при отправке базы: {e}")
+    # ---------------------------------------
     
     # Подключаем роутеры (сначала админский, чтобы команды не конфликтовали)
     dp.include_router(admin.router)
