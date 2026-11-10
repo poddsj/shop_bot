@@ -13,8 +13,6 @@ from app.database import (
 from app.config import ADMIN_IDS
 
 router = Router()
-
-from aiogram import Bot
 bot = None
 
 @router.message(Command("admin"))
@@ -26,15 +24,14 @@ async def admin_panel(message: types.Message):
 
 @router.message(F.text == "➕ Добавить товар")
 async def add_product_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     await message.answer("Введите название товара:")
     await state.set_state(AdminStates.waiting_product_name)
 
 @router.message(AdminStates.waiting_product_name)
 async def add_product_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Введите описание товара:")
+    await message.answer("Введите описание товара (краткое):")
     await state.set_state(AdminStates.waiting_product_desc)
 
 @router.message(AdminStates.waiting_product_desc)
@@ -51,14 +48,40 @@ async def add_product_price(message: types.Message, state: FSMContext):
         await message.answer("Введите число:")
         return
     await state.update_data(price=price)
-    await message.answer("Введите URL фото товара (или напишите 'нет'):")
+    await message.answer("Отправьте фотографию товара (или напишите 'нет', если без фото):")
     await state.set_state(AdminStates.waiting_product_photo)
 
-@router.message(AdminStates.waiting_product_photo)
+@router.message(AdminStates.waiting_product_photo, F.photo | F.text)
 async def add_product_photo(message: types.Message, state: FSMContext):
-    photo = None if message.text.lower() == "нет" else message.text
-    await state.update_data(photo=photo)
-    await message.answer("Введите количество на складе:")
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+    else:
+        photo_id = None
+        
+    await state.update_data(photo_id=photo_id)
+    await message.answer("Отправьте сам товар (файл-документ, видео или текст).\nЭто получит пользователь после покупки:")
+    await state.set_state(AdminStates.waiting_product_file)
+
+@router.message(AdminStates.waiting_product_file)
+async def add_product_file(message: types.Message, state: FSMContext):
+    file_id = None
+    file_type = None
+    
+    if message.document:
+        file_id = message.document.file_id
+        file_type = "document"
+    elif message.video:
+        file_id = message.video.file_id
+        file_type = "video"
+    elif message.text:
+        file_id = message.text 
+        file_type = "text"
+    else:
+        await message.answer("Пожалуйста, отправьте файл (документ, видео) или текст.")
+        return
+
+    await state.update_data(file_id=file_id, file_type=file_type)
+    await message.answer("Введите количество на складе (целое число):")
     await state.set_state(AdminStates.waiting_product_stock)
 
 @router.message(AdminStates.waiting_product_stock)
@@ -69,14 +92,17 @@ async def add_product_stock(message: types.Message, state: FSMContext):
         await message.answer("Введите целое число:")
         return
     data = await state.get_data()
-    add_product(data["name"], data["desc"], data["price"], data["photo"], stock)
+    
+    add_product(
+        data["name"], data["desc"], data["price"], 
+        data["photo_id"], data["file_id"], data["file_type"], stock
+    )
     await state.clear()
     await message.answer(f"✅ Товар «{data['name']}» добавлен!", reply_markup=admin_kb())
 
 @router.message(F.text == "💵 Выдать баланс")
 async def admin_give_balance_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     await message.answer("Введите Telegram ID пользователя, которому нужно выдать баланс:")
     await state.set_state(AdminStates.waiting_balance_user_id)
 
@@ -130,8 +156,7 @@ async def admin_give_balance_amount(message: types.Message, state: FSMContext):
 
 @router.message(F.text == "📢 Рассылка")
 async def broadcast_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     await message.answer("Введите текст для рассылки всем пользователям:")
     await state.set_state(AdminStates.waiting_broadcast)
 
@@ -139,23 +164,46 @@ async def broadcast_start(message: types.Message, state: FSMContext):
 async def broadcast_send(message: types.Message, state: FSMContext):
     await state.clear()
     users = get_all_users()
-    success = 0
-    await message.answer(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
+    
+    await message.answer(f"⏳ Начинаю фоновую рассылку для {len(users)} пользователей...\nРезультат пришлю сюда.", reply_markup=admin_kb())
     
     if bot:
-        for uid in users:
-            try:
-                await bot.send_message(uid, message.text)
-                success += 1
-                await asyncio.sleep(0.05)
-            except:
-                pass
-    await message.answer(f"✅ Рассылка завершена. Доставлено: {success}/{len(users)}", reply_markup=admin_kb())
+        task = asyncio.create_task(process_broadcast(bot, message.text, message.from_user.id, users))
+        from app.handlers.user import bg_tasks
+        bg_tasks.add(task)
+        task.add_done_callback(bg_tasks.discard)
+
+async def process_broadcast(bot_instance, text, admin_id, users):
+    success = 0
+    blocked = 0
+    errors = 0
+    
+    for uid in users:
+        try:
+            await bot_instance.send_message(uid, text)
+            success += 1
+        except Exception as e:
+            if "blocked" in str(e).lower() or "chat not found" in str(e).lower():
+                blocked += 1
+            else:
+                errors += 1
+        await asyncio.sleep(0.1)
+
+    report = (
+        f"✅ <b>Рассылка завершена!</b>\n\n"
+        f"📨 Всего в базе: {len(users)}\n"
+        f"✅ Доставлено: {success}\n"
+        f"🚫 Заблокировали бота: {blocked}\n"
+        f"⚠️ Другие ошибки: {errors}"
+    )
+    try:
+        await bot_instance.send_message(admin_id, report, parse_mode="HTML")
+    except:
+        pass
 
 @router.message(F.text == "🎫 Тикеты")
 async def list_tickets(message: types.Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
+    if message.from_user.id not in ADMIN_IDS: return
     tickets = get_tickets('open')
     if not tickets:
         await message.answer("Нет открытых тикетов.")

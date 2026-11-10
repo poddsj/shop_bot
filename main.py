@@ -6,27 +6,26 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from app.config import BOT_TOKEN
 from app.database import init_db
 from app.handlers import user, admin
-from app.handlers.user import bg_tasks # импортируем хранилище задач
 
-# Передаем экземпляр бота в модули (костыль для фоновых задач)
+# Импортируем модули, чтобы передать в них экземпляр бота
 import app.handlers.user as user_module
 import app.handlers.admin as admin_module
 
 async def main():
     logging.basicConfig(level=logging.INFO)
     
-    # Инициализация БД (создаст папку data и файл shop.db)
+    # Инициализация БД
     init_db()
     
     bot = Bot(token=BOT_TOKEN)
     
-    # Передаем бота в модули, чтобы они могли отправлять сообщения
+    # Передаем бота в модули (для отправки файлов и фоновых задач)
     user_module.bot = bot
     admin_module.bot = bot
     
     dp = Dispatcher(storage=MemoryStorage())
     
-    # Подключаем роутеры (сначала админский, чтобы не было конфликтов)
+    # Подключаем роутеры (сначала админский, чтобы команды не конфликтовали)
     dp.include_router(admin.router)
     dp.include_router(user.router)
     

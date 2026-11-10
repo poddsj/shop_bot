@@ -5,12 +5,10 @@ from app.config import XROCKET_API_KEY, XROCKET_API_URL
 
 async def create_xrocket_invoice(amount, user_id):
     url = f"{XROCKET_API_URL}/invoices"
-    
     headers = {
         "Authorization": f"Bearer {XROCKET_API_KEY}",
         "Content-Type": "application/json"
     }
-    
     payload = {
         "priceAmount": f"{amount:.2f}",
         "priceCurrency": "USDT", 
@@ -31,9 +29,7 @@ async def create_xrocket_invoice(amount, user_id):
             if resp.status in (200, 201):
                 inv_id = data.get("id") or data.get("data", {}).get("id")
                 links = data.get("links") or data.get("data", {}).get("links", {})
-                
                 pay_link = links.get("telegramBotLink") or links.get("web_url") or links.get("pay_url")
-                
                 return inv_id, pay_link
             else:
                 logging.error(f"XRocket Create Error: {resp.status} - {data}")

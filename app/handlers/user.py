@@ -2,25 +2,20 @@ import asyncio
 from aiogram import Router, types, F
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import UserStates
 from app.keyboards import main_kb, catalog_kb
 from app.database import (
     register_user, get_user, get_purchases, get_products, update_balance,
-    add_purchase, create_ticket, create_payment, get_payment, complete_payment
+    add_purchase, create_ticket, create_payment, get_payment, complete_payment, get_db
 )
 from app.services.xrocket import create_xrocket_invoice, check_xrocket_payment
 from app.config import ADMIN_IDS
 
 router = Router()
-
-# Хранилище для фоновых задач
+bot = None
 bg_tasks = set()
-
-# Передаем экземпляр бота для отправки сообщений из фоновых задач
-# Примечание: лучше использовать middleware, но для простоты передадим глобально в main.py
-from aiogram import Bot
-bot = None # будет установлен в main.py
 
 @router.message(CommandStart())
 async def start(message: types.Message):
@@ -29,7 +24,7 @@ async def start(message: types.Message):
         "Добро пожаловать в магазин!\n\n"
         "🛍 Каталог — просмотр товаров\n"
         "👤 Профиль — баланс и история\n"
-        "💰 Пополнить — через XRocket (от 1$)\n"
+        "💰 Пополнить — через XRocket (от 0.01$)\n"
         "🆘 Поддержка — связь с админом",
         reply_markup=main_kb()
     )
@@ -70,54 +65,80 @@ async def catalog(message: types.Message):
         return
     await message.answer("🛍 Выберите товар:", reply_markup=catalog_kb(products))
 
-@router.callback_query(F.data.startswith("buy_"))
-async def buy_product(callback: types.CallbackQuery):
+@router.callback_query(F.data.startswith("view_"))
+async def view_product(callback: types.CallbackQuery):
     product_id = int(callback.data.split("_")[1])
-    # Импортируем функцию работы с БД внутри или выносим в database
-    from app.database import get_db
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM products WHERE id = ?", (product_id,))
     product = c.fetchone()
     conn.close()
-    
+
     if not product:
         await callback.answer("Товар не найден", show_alert=True)
         return
-        
+
+    text = f"📦 {product[1]}\n\n{product[2]}\n\n💰 Цена: {product[3]:.2f}$\n📊 В наличии: {product[7]} шт."
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Купить", callback_data=f"confirm_buy_{product_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_view")]
+    ])
+
+    if product[4]: 
+        await callback.message.answer_photo(photo=product[4], caption=text, reply_markup=kb)
+        await callback.message.delete()
+    else:
+        await callback.message.edit_text(text, reply_markup=kb)
+
+@router.callback_query(F.data == "cancel_view")
+async def cancel_view(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await callback.message.answer("Вы вернулись в меню.", reply_markup=main_kb())
+
+@router.callback_query(F.data.startswith("confirm_buy_"))
+async def confirm_buy(callback: types.CallbackQuery):
+    product_id = int(callback.data.split("_")[2])
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM products WHERE id = ?", (product_id,))
+    product = c.fetchone()
+    conn.close()
+
     user = get_user(callback.from_user.id)
-    if user[2] < product[3]:
-        await callback.answer(
-            f"Недостаточно средств!\nВаш баланс: {user[2]:.2f}$\nЦена: {product[3]:.2f}$",
-            show_alert=True
-        )
+    
+    if not product or product[7] <= 0:
+        await callback.answer("Товара нет в наличии!", show_alert=True)
         return
-        
+    if user[2] < product[3]:
+        await callback.answer(f"Недостаточно средств!\nВаш баланс: {user[2]:.2f}$\nЦена: {product[3]:.2f}$", show_alert=True)
+        return
+
     update_balance(callback.from_user.id, -product[3])
     add_purchase(callback.from_user.id, product[0], product[1], product[3])
     
-    updated_user = get_user(callback.from_user.id)
-    await callback.message.edit_text(
-        f"✅ Покупка совершена!\n\n"
-        f"Товар: {product[1]}\n"
-        f"Цена: {product[3]:.2f}$\n"
-        f"Остаток баланса: {updated_user[2]:.2f}$"
-    )
+    await callback.message.delete()
+    
+    if product[6] == "document":
+        await bot.send_document(callback.from_user.id, document=product[5], caption=f"✅ Спасибо за покупку!\nТовар: {product[1]}")
+    elif product[6] == "video":
+        await bot.send_video(callback.from_user.id, video=product[5], caption=f"✅ Спасибо за покупку!\nТовар: {product[1]}")
+    elif product[6] == "text":
+        await bot.send_message(callback.from_user.id, f"✅ Спасибо за покупку!\n\nТовар: {product[1]}\n\nВаш товар:\n{product[5]}")
 
 @router.message(F.text == "💰 Пополнить")
 async def topup(message: types.Message, state: FSMContext):
-    await message.answer("Введите сумму пополнения в USD (минимум 1$):")
+    await message.answer("Введите сумму пополнения в USD (минимум 0.01$):")
     await state.set_state(UserStates.waiting_topup_amount)
 
 @router.message(UserStates.waiting_topup_amount)
 async def process_topup(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount < 1:
-            await message.answer("Минимальная сумма — 1$. Попробуйте снова:")
+        if amount < 0.01:
+            await message.answer("Минимальная сумма — 0.01$. Попробуйте снова:")
             return
     except ValueError:
-        await message.answer("Введите число (например: 5 или 10.5):")
+        await message.answer("Введите число (например: 0.5 или 10):")
         return
         
     await state.clear()
@@ -134,7 +155,7 @@ async def process_topup(message: types.Message, state: FSMContext):
     await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
         f"👉 <a href='{link}'>Оплатить по ссылке</a>\n\n"
-        f"После оплаты баланс пополнится автоматически (в течение 1–2 минут).",
+        f"После оплаты баланс пополнится автоматически.",
         parse_mode="HTML"
     )
     
@@ -156,7 +177,7 @@ async def poll_payment(invoice_id, user_id, amount):
             update_balance(user_id, amount)
             
             user = get_user(user_id)
-            if bot: # Проверка на случай, если бот не передан
+            if bot:
                 await bot.send_message(
                     user_id,
                     f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$"

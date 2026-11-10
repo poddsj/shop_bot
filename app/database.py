@@ -1,28 +1,40 @@
 import sqlite3
+import os
 from datetime import datetime
 from app.config import DB_PATH
-import os
 
 def init_db():
-    # Создаем папку data, если её нет
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    db_path = DB_PATH if DB_PATH else "data/shop.db"
+    db_dir = os.path.dirname(db_path)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(db_path)
     c = conn.cursor()
+    
+    # Таблица пользователей
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         balance REAL DEFAULT 0,
         registered_at TEXT
     )""")
+    
+    # УДАЛЯЕМ СТАРУЮ ТАБЛИЦУ ТОВАРОВ (так как изменилась структура)
+    c.execute("DROP TABLE IF EXISTS products")
+    
+    # Новая таблица товаров
     c.execute("""CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         description TEXT,
         price REAL,
-        photo_url TEXT,
+        photo_id TEXT,
+        file_id TEXT,
+        file_type TEXT,
         stock INTEGER DEFAULT 0
     )""")
+    
     c.execute("""CREATE TABLE IF NOT EXISTS purchases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -31,6 +43,7 @@ def init_db():
         price REAL,
         purchased_at TEXT
     )""")
+    
     c.execute("""CREATE TABLE IF NOT EXISTS tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -39,6 +52,7 @@ def init_db():
         admin_reply TEXT,
         created_at TEXT
     )""")
+    
     c.execute("""CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
@@ -47,11 +61,12 @@ def init_db():
         status TEXT DEFAULT 'pending',
         created_at TEXT
     )""")
+    
     conn.commit()
     conn.close()
 
 def get_db():
-    return sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB_PATH if DB_PATH else "data/shop.db")
 
 def register_user(user_id, username):
     conn = get_db()
@@ -84,11 +99,18 @@ def get_products():
     conn.close()
     return rows
 
-def add_product(name, description, price, photo_url, stock):
+def add_product(name, description, price, photo_id, file_id, file_type, stock):
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT INTO products (name, description, price, photo_url, stock) VALUES (?, ?, ?, ?, ?)",
-              (name, description, price, photo_url, stock))
+    c.execute("INSERT INTO products (name, description, price, photo_id, file_id, file_type, stock) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (name, description, price, photo_id, file_id, file_type, stock))
+    conn.commit()
+    conn.close()
+
+def delete_product(product_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM products WHERE id = ?", (product_id,))
     conn.commit()
     conn.close()
 
