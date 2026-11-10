@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import UserStates
-from app.keyboards import main_kb, catalog_kb
+from app.keyboards import main_kb, catalog_kb, payment_kb  # Добавили payment_kb
 from app.database import (
     register_user, get_user, get_purchases, get_products, update_balance,
     add_purchase, create_ticket, create_payment, get_payment, complete_payment, get_db
@@ -21,11 +21,9 @@ bg_tasks = set()
 async def start(message: types.Message):
     register_user(message.from_user.id, message.from_user.username or "unknown")
     await message.answer(
-        "Добро пожаловать в магазин!\n\n"
+        "Добро пожаловать в Trinadtac Shop!\n\n"
         "🛍 Каталог — просмотр товаров\n"
-        "👤 Профиль — баланс и история\n"
-        "💰 Пополнить — через XRocket (от 0.01$)\n"
-        "🆘 Поддержка — связь с админом",
+        "👤 Профиль — баланс и история",
         reply_markup=main_kb()
     )
 
@@ -152,16 +150,66 @@ async def process_topup(message: types.Message, state: FSMContext):
         
     create_payment(message.from_user.id, invoice_id, amount)
     
+    # Отправляем ссылку и добавляем кнопку "Я оплатил"
     await wait_msg.edit_text(
         f"💰 Счёт на {amount:.2f}$ создан!\n\n"
         f"👉 <a href='{link}'>Оплатить по ссылке</a>\n\n"
-        f"После оплаты баланс пополнится автоматически.",
-        parse_mode="HTML"
+        f"После оплаты нажмите кнопку ниже (или подождите 1-2 минуты).",
+        parse_mode="HTML",
+        reply_markup=payment_kb(invoice_id)
     )
     
     task = asyncio.create_task(poll_payment(invoice_id, message.from_user.id, amount))
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
+
+# НОВЫЙ ОБРАБОТЧИК ДЛЯ КНОПКИ "Я ОПЛАТИЛ"
+@router.callback_query(F.data.startswith("check_pay_"))
+async def manual_check_payment(callback: types.CallbackQuery):
+    invoice_id = callback.data.split("_")[2]
+    
+    # Проверяем статус через API
+    status = await check_xrocket_payment(invoice_id)
+    
+    if status == "paid":
+        # Проверяем, не зачислен ли уже
+        payment = get_payment(invoice_id)
+        if payment and payment[4] == "paid":
+            await callback.answer("Этот платёж уже был зачислен ранее!", show_alert=True)
+            await callback.message.delete()
+            return
+            
+        amount = payment[3] if payment else 0
+        user_id = payment[1] if payment else 0
+        
+        complete_payment(invoice_id)
+        update_balance(user_id, amount)
+        
+        user = get_user(user_id)
+        await callback.message.delete()
+        await bot.send_message(
+            user_id,
+            f"✅ Оплата подтверждена! Баланс пополнен на {amount:.2f}$.\nТекущий баланс: {user[2]:.2f}$",
+            reply_markup=main_kb()
+        )
+    else:
+        await callback.answer("❌ Оплата ещё не поступила. Подождите немного или оплатите счёт.", show_alert=True)
+
+# ЕДИНАЯ ЛОГИКА ЗАЧИСЛЕНИЯ (ДЛЯ ТАЙМЕРА)
+async def process_successful_payment(invoice_id, user_id, amount):
+    payment = get_payment(invoice_id)
+    if payment and payment[4] == "paid":
+        return # Уже зачислено
+        
+    complete_payment(invoice_id)
+    update_balance(user_id, amount)
+    
+    user = get_user(user_id)
+    if bot:
+        await bot.send_message(
+            user_id,
+            f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$"
+        )
 
 async def poll_payment(invoice_id, user_id, amount):
     for _ in range(360):
@@ -169,28 +217,15 @@ async def poll_payment(invoice_id, user_id, amount):
         status = await check_xrocket_payment(invoice_id)
         
         if status == "paid":
-            payment = get_payment(invoice_id)
-            if payment and payment[4] == "paid":
-                return 
-                
-            complete_payment(invoice_id)
-            update_balance(user_id, amount)
-            
-            user = get_user(user_id)
-            if bot:
-                await bot.send_message(
-                    user_id,
-                    f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$"
-                )
+            await process_successful_payment(invoice_id, user_id, amount)
             return
-            
         elif status in ("expired", "cancelled"):
             if bot:
                 await bot.send_message(user_id, "❌ Время ожидания оплаты истекло. Создайте новый счёт.")
             return
             
     if bot:
-        await bot.send_message(user_id, "⏰ Время ожидания оплаты истекло. Если вы оплатили — обратитесь в поддержку.")
+        await bot.send_message(user_id, "⏰ Время ожидания оплаты истекло. Если вы оплатили — нажмите 'Я оплатил' или обратитесь в поддержку.")
 
 @router.message(F.text == "🆘 Поддержка")
 async def support(message: types.Message, state: FSMContext):

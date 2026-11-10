@@ -23,3 +23,8 @@ def catalog_kb(products):
             callback_data=f"view_{p[0]}"
         )])
     return kb
+
+def payment_kb(invoice_id):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_pay_{invoice_id}")]
+    ])
