@@ -11,13 +11,13 @@ def admin_kb():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="➕ Добавить товар"), KeyboardButton(text="📢 Рассылка")],
         [KeyboardButton(text="💵 Выдать баланс"), KeyboardButton(text="🎫 Тикеты")],
+        [KeyboardButton(text="🗑 Удалить товар")], # Новая кнопка
         [KeyboardButton(text="🔙 Выйти из админки")]
     ], resize_keyboard=True)
 
 def catalog_kb(products):
     kb = InlineKeyboardMarkup(inline_keyboard=[])
     for p in products:
-        # callback_data изменен с buy_ на view_
         kb.inline_keyboard.append([InlineKeyboardButton(
             text=f"{p[1]} — {p[3]}$",
             callback_data=f"view_{p[0]}"
@@ -28,3 +28,12 @@ def payment_kb(invoice_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_pay_{invoice_id}")]
     ])
+
+def admin_delete_products_kb(products):
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    for p in products:
+        kb.inline_keyboard.append([InlineKeyboardButton(
+            text=f"❌ {p[1]} (остаток: {p[7]} шт.)", 
+            callback_data=f"del_prod_{p[0]}"
+        )])
+    return kb

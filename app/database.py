@@ -12,55 +12,28 @@ def init_db():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
-    # Таблица пользователей
     c.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        username TEXT,
-        balance REAL DEFAULT 0,
-        registered_at TEXT
+        user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, registered_at TEXT
     )""")
     
-    # УДАЛЯЕМ СТАРУЮ ТАБЛИЦУ ТОВАРОВ (так как изменилась структура)
-    c.execute("DROP TABLE IF EXISTS products")
-    
-    # Новая таблица товаров
     c.execute("""CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        description TEXT,
-        price REAL,
-        photo_id TEXT,
-        file_id TEXT,
-        file_type TEXT,
-        stock INTEGER DEFAULT 0
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT, price REAL, 
+        photo_id TEXT, file_id TEXT, file_type TEXT, stock INTEGER DEFAULT 0
     )""")
     
     c.execute("""CREATE TABLE IF NOT EXISTS purchases (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        product_id INTEGER,
-        product_name TEXT,
-        price REAL,
-        purchased_at TEXT
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id INTEGER, 
+        product_name TEXT, price REAL, purchased_at TEXT
     )""")
     
     c.execute("""CREATE TABLE IF NOT EXISTS tickets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        message TEXT,
-        status TEXT DEFAULT 'open',
-        admin_reply TEXT,
-        created_at TEXT
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, message TEXT, 
+        status TEXT DEFAULT 'open', admin_reply TEXT, created_at TEXT
     )""")
     
     c.execute("""CREATE TABLE IF NOT EXISTS payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        invoice_id TEXT,
-        client_invoice_id TEXT, 
-        amount REAL,
-        status TEXT DEFAULT 'pending',
-        created_at TEXT
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, invoice_id TEXT, 
+        client_invoice_id TEXT, amount REAL, status TEXT DEFAULT 'pending', created_at TEXT
     )""")
     
     conn.commit()
@@ -96,6 +69,15 @@ def get_products():
     conn = get_db()
     c = conn.cursor()
     c.execute("SELECT * FROM products WHERE stock > 0")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_products_for_admin():
+    # Возвращает ВСЕ товары, даже те, у которых stock = 0
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM products")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -185,4 +167,3 @@ def complete_payment(invoice_id):
     c.execute("UPDATE payments SET status = 'paid' WHERE invoice_id = ?", (invoice_id,))
     conn.commit()
     conn.close()
-

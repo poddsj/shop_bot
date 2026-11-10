@@ -5,10 +5,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import AdminStates
-from app.keyboards import admin_kb, main_kb
+from app.keyboards import admin_kb, main_kb, admin_delete_products_kb
 from app.database import (
     get_user, update_balance, add_product, get_tickets, 
-    reply_ticket, get_all_users, get_db
+    reply_ticket, get_all_users, get_db, get_all_products_for_admin, delete_product
 )
 from app.config import ADMIN_IDS
 
@@ -57,7 +57,6 @@ async def add_product_photo(message: types.Message, state: FSMContext):
         photo_id = message.photo[-1].file_id
     else:
         photo_id = None
-        
     await state.update_data(photo_id=photo_id)
     await message.answer("Отправьте сам товар (файл-документ, видео или текст).\nЭто получит пользователь после покупки:")
     await state.set_state(AdminStates.waiting_product_file)
@@ -99,6 +98,57 @@ async def add_product_stock(message: types.Message, state: FSMContext):
     )
     await state.clear()
     await message.answer(f"✅ Товар «{data['name']}» добавлен!", reply_markup=admin_kb())
+
+# ========== УДАЛЕНИЕ ТОВАРА ==========
+@router.message(F.text == "🗑 Удалить товар")
+async def admin_delete_product_start(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS: return
+        
+    products = get_all_products_for_admin() 
+    
+    if not products:
+        await message.answer("Каталог пуст. Удалять нечего.")
+        return
+        
+    await message.answer(
+        "Выберите товар, который хотите удалить (нажмите на кнопку):",
+        reply_markup=admin_delete_products_kb(products)
+    )
+
+@router.callback_query(F.data.startswith("del_prod_"))
+async def admin_delete_product_confirm(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+        
+    product_id = int(callback.data.split("_")[2])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_del_{product_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_del")
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        "Вы уверены, что хотите удалить этот товар? Это действие нельзя отменить.",
+        reply_markup=kb
+    )
+
+@router.callback_query(F.data.startswith("confirm_del_"))
+async def admin_delete_product_execute(callback: types.CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        return
+        
+    product_id = int(callback.data.split("_")[2])
+    delete_product(product_id)
+    
+    await callback.message.edit_text("✅ Товар успешно удален из базы данных.")
+
+@router.callback_query(F.data == "cancel_del")
+async def admin_delete_product_cancel(callback: types.CallbackQuery):
+    await callback.message.edit_text("Удаление отменено.")
+# ==================================
 
 @router.message(F.text == "💵 Выдать баланс")
 async def admin_give_balance_start(message: types.Message, state: FSMContext):
