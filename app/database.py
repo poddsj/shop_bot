@@ -57,6 +57,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         invoice_id TEXT,
+        client_invoice_id TEXT, 
         amount REAL,
         status TEXT DEFAULT 'pending',
         created_at TEXT
@@ -162,11 +163,11 @@ def get_all_users():
     conn.close()
     return [r[0] for r in rows]
 
-def create_payment(user_id, invoice_id, amount):
+def create_payment(user_id, invoice_id, client_invoice_id, amount):
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT INTO payments (user_id, invoice_id, amount, created_at) VALUES (?, ?, ?, ?)",
-              (user_id, invoice_id, amount, datetime.now().isoformat()))
+    c.execute("INSERT INTO payments (user_id, invoice_id, client_invoice_id, amount, created_at) VALUES (?, ?, ?, ?, ?)",
+              (user_id, invoice_id, client_invoice_id, amount, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
@@ -184,3 +185,4 @@ def complete_payment(invoice_id):
     c.execute("UPDATE payments SET status = 'paid' WHERE invoice_id = ?", (invoice_id,))
     conn.commit()
     conn.close()
+
