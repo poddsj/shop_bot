@@ -165,18 +165,23 @@ async def process_topup(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("check_pay_"))
 async def manual_check_payment(callback: types.CallbackQuery):
-    invoice_id = callback.data.split("_")[2]
+    # Убираем лишние символы и пробелы
+    invoice_id = callback.data.replace("check_pay_", "").strip()
     
-    # Отвечаем сразу, чтобы кнопка не висела (не более 3 сек)
     await callback.answer("Проверяем...")
     
+    # Получаем платеж из БД
     payment = get_payment(invoice_id)
-    if payment and payment[4] == "paid":
+    if not payment:
+        await callback.message.answer("❌ Ошибка: Платёж не найден в базе данных.")
+        return
+        
+    if payment[4] == "paid":
         await callback.message.delete()
         await callback.message.answer("✅ Этот платёж уже был зачислен ранее!", reply_markup=main_kb())
         return
 
-    # Опрашиваем API 5 раз (ждем 10 секунд)
+    # Опрашиваем API
     status = "unknown"
     for _ in range(5):
         status = await check_xrocket_payment(invoice_id)
@@ -185,8 +190,8 @@ async def manual_check_payment(callback: types.CallbackQuery):
         await asyncio.sleep(2)
         
     if status == "paid":
-        amount = payment[3] if payment else 0
-        user_id = payment[1] if payment else 0
+        amount = payment[3]
+        user_id = payment[1]
         
         complete_payment(invoice_id)
         update_balance(user_id, amount)
@@ -199,9 +204,8 @@ async def manual_check_payment(callback: types.CallbackQuery):
             reply_markup=main_kb()
         )
     else:
-        # Отправляем ОБЫЧНОЕ СООБЩЕНИЕ, а не всплывающее окно
         await callback.message.answer(
-            f"❌ Оплата пока не найдена.\nСтатус от xRocket: <code>{status}</code>\n\n"
+            f"❌ Оплата пока не найдена.\nСтатус от xRocket: <code>{status}</code>\nID инвойса: <code>{invoice_id}</code>\n\n"
             f"Если вы точно оплатили, подождите 1-2 минуты. Бот сам пришлет уведомление, когда платеж пройдет.",
             parse_mode="HTML"
         )
