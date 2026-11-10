@@ -41,35 +41,40 @@ async def create_xrocket_invoice(amount, user_id):
 async def check_xrocket_payment(invoice_id, client_invoice_id=None):
     headers = {"Authorization": f"Bearer {XROCKET_API_KEY}"}
     
-    # 1. Пробуем найти по внутреннему ID
     url = f"{XROCKET_API_URL}/invoices/{invoice_id}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                logging.info(f"XRocket Check (by ID) [{invoice_id}]: {data}")
-                status = data.get("status") or data.get("state") or data.get("data", {}).get("status") or data.get("data", {}).get("state")
+                status = data.get("status") or data.get("state")
                 if status in ("paid", "completed"):
                     return "paid"
                 return str(status)
             
-            # 2. Если ID не найден (404), запрашиваем список последних инвойсов
             if resp.status == 404:
-                logging.info(f"XRocket: 404 by ID, checking recent invoices list...")
-                list_url = f"{XROCKET_API_URL}/invoices?limit=10"
+                # Если не нашли по ID, запрашиваем список
+                list_url = f"{XROCKET_API_URL}/invoices?limit=20"
                 async with session.get(list_url, headers=headers) as resp_list:
                     if resp_list.status == 200:
                         data_list = await resp_list.json()
                         items = data_list.get("data", []) if isinstance(data_list, dict) else data_list
                         
-                        # Ищем совпадение по client_invoice_id
-                        if items and isinstance(items, list):
-                            for item in items:
-                                if item.get("clientInvoiceId") == client_invoice_id or str(item.get("id")) == str(invoice_id):
-                                    status = item.get("status") or item.get("state")
-                                    if status in ("paid", "completed"):
-                                        return "paid"
-                                    return str(status)
-                return f"HTTP_404"
-                
+                        # Если список пустой или это не список — возвращаем отладочную инфу
+                        if not items or not isinstance(items, list):
+                            return f"DEBUG_LIST_EMPTY: {str(data_list)[:50]}"
+                        
+                        # Ищем наш инвойс в списке
+                        for item in items:
+                            # Сравниваем и по ID, и по clientInvoiceId
+                            if str(item.get("id")) == str(invoice_id) or item.get("clientInvoiceId") == client_invoice_id:
+                                status = item.get("status") or item.get("state")
+                                if status in ("paid", "completed"):
+                                    return "paid"
+                                return str(status)
+                        
+                        # Если ничего не нашли, выводим первые 3 элемента списка для отладки
+                        debug_info = f"NOT_FOUND. Recent: {items[0].get('id')} ({items[0].get('status')})"
+                        return debug_info
+                    else:
+                        return f"LIST_ERROR_{resp_list.status}"
             return f"HTTP_{resp.status}"
