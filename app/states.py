@@ -1,6 +1,7 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class AdminStates(StatesGroup):
+    waiting_category_name = State() # Новое
     waiting_product_name = State()
     waiting_product_desc = State()
     waiting_product_price = State()

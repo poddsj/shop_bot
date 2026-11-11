@@ -15,9 +15,13 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, registered_at TEXT
     )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT
+    )""")
     
     c.execute("""CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, description TEXT, price REAL, 
+        id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT, description TEXT, price REAL, 
         photo_id TEXT, file_id TEXT, file_type TEXT, stock INTEGER DEFAULT 0
     )""")
     
@@ -65,28 +69,55 @@ def update_balance(user_id, amount):
     conn.commit()
     conn.close()
 
-def get_products():
+# ================= КАТЕГОРИИ =================
+def add_category(name):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM products WHERE stock > 0")
+    c.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+    conn.commit()
+    conn.close()
+
+def get_categories():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM categories")
     rows = c.fetchall()
     conn.close()
     return rows
 
-def get_all_products_for_admin():
-    # Возвращает ВСЕ товары, даже те, у которых stock = 0
+def delete_category(category_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT * FROM products")
+    c.execute("DELETE FROM products WHERE category_id = ?", (category_id,))
+    c.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+    conn.commit()
+    conn.close()
+
+# ================= ТОВАРЫ =================
+def get_products(category_id=None):
+    conn = get_db()
+    c = conn.cursor()
+    if category_id:
+        c.execute("SELECT * FROM products WHERE category_id = ? AND stock > 0", (category_id,))
+    else:
+        c.execute("SELECT * FROM products WHERE stock > 0")
     rows = c.fetchall()
     conn.close()
     return rows
 
-def add_product(name, description, price, photo_id, file_id, file_type, stock):
+def get_admin_products(category_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute("INSERT INTO products (name, description, price, photo_id, file_id, file_type, stock) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (name, description, price, photo_id, file_id, file_type, stock))
+    c.execute("SELECT * FROM products WHERE category_id = ?", (category_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def add_product(category_id, name, description, price, photo_id, file_id, file_type, stock):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("INSERT INTO products (category_id, name, description, price, photo_id, file_id, file_type, stock) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              (category_id, name, description, price, photo_id, file_id, file_type, stock))
     conn.commit()
     conn.close()
 
@@ -97,6 +128,7 @@ def delete_product(product_id):
     conn.commit()
     conn.close()
 
+# ================= ПОКУПКИ И ТИКЕТЫ =================
 def get_purchases(user_id):
     conn = get_db()
     c = conn.cursor()
@@ -145,6 +177,7 @@ def get_all_users():
     conn.close()
     return [r[0] for r in rows]
 
+# ================= ПЛАТЕЖИ =================
 def create_payment(user_id, invoice_id, client_invoice_id, amount):
     conn = get_db()
     c = conn.cursor()

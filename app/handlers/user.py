@@ -5,7 +5,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import UserStates
-from app.keyboards import main_kb, catalog_kb, payment_kb
+from app.keyboards import main_kb, payment_kb, client_categories_kb, client_products_kb
 from app.database import (
     register_user, get_user, get_purchases, get_products, update_balance,
     add_purchase, create_ticket, create_payment, get_payment, complete_payment, get_db
@@ -61,11 +61,24 @@ async def my_purchases(message: types.Message, state: FSMContext):
 @router.message(F.text == "🛍 Каталог", StateFilter("*"))
 async def catalog(message: types.Message, state: FSMContext):
     await state.clear()
-    products = get_products()
-    if not products:
+    kb = client_categories_kb()
+    if not kb.inline_keyboard:
         await message.answer("Каталог пуст. Загляните позже!")
         return
-    await message.answer("🛍 Выберите товар:", reply_markup=catalog_kb(products))
+    await message.answer("🛍 Выберите категорию:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("user_cat_"))
+async def user_open_category(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split("_")[2])
+    await callback.message.edit_text("🛍 Выберите товар:", reply_markup=client_products_kb(cat_id))
+
+@router.callback_query(F.data == "user_back_cats")
+async def user_back_categories(callback: types.CallbackQuery):
+    kb = client_categories_kb()
+    if not kb.inline_keyboard:
+        await callback.message.edit_text("Каталог пуст.")
+    else:
+        await callback.message.edit_text("🛍 Выберите категорию:", reply_markup=kb)
 
 @router.callback_query(F.data.startswith("view_"))
 async def view_product(callback: types.CallbackQuery):
@@ -80,14 +93,15 @@ async def view_product(callback: types.CallbackQuery):
         await callback.answer("Товар не найден", show_alert=True)
         return
 
-    text = f"📦 {product[1]}\n\n{product[2]}\n\n💰 Цена: {product[3]:.2f}$\n📊 В наличии: {product[7]} шт."
+    # Индексы: 0-id, 1-cat_id, 2-name, 3-desc, 4-price, 5-photo, 6-file, 7-type, 8-stock
+    text = f"📦 {product[2]}\n\n{product[3]}\n\n💰 Цена: {product[4]:.2f}$\n📊 В наличии: {product[8]} шт."
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Купить", callback_data=f"confirm_buy_{product_id}")],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_view")]
     ])
 
-    if product[4]: 
-        await callback.message.answer_photo(photo=product[4], caption=text, reply_markup=kb)
+    if product[5]: # photo_id
+        await callback.message.answer_photo(photo=product[5], caption=text, reply_markup=kb)
         await callback.message.delete()
     else:
         await callback.message.edit_text(text, reply_markup=kb)
@@ -108,25 +122,26 @@ async def confirm_buy(callback: types.CallbackQuery):
 
     user = get_user(callback.from_user.id)
     
-    if not product or product[7] <= 0:
+    if not product or product[8] <= 0:
         await callback.answer("Товара нет в наличии!", show_alert=True)
         return
-    if user[2] < product[3]:
-        await callback.answer(f"Недостаточно средств!\nВаш баланс: {user[2]:.2f}$\nЦена: {product[3]:.2f}$", show_alert=True)
+    if user[2] < product[4]:
+        await callback.answer(f"Недостаточно средств!\nВаш баланс: {user[2]:.2f}$\nЦена: {product[4]:.2f}$", show_alert=True)
         return
 
-    update_balance(callback.from_user.id, -product[3])
-    add_purchase(callback.from_user.id, product[0], product[1], product[3])
+    update_balance(callback.from_user.id, -product[4])
+    add_purchase(callback.from_user.id, product[0], product[2], product[4])
     
     await callback.message.delete()
     
-    if product[6] == "document":
-        await bot.send_document(callback.from_user.id, document=product[5], caption=f"✅ Спасибо за покупку!\nТовар: {product[1]}")
-    elif product[6] == "video":
-        await bot.send_video(callback.from_user.id, video=product[5], caption=f"✅ Спасибо за покупку!\nТовар: {product[1]}")
-    elif product[6] == "text":
-        await bot.send_message(callback.from_user.id, f"✅ Спасибо за покупку!\n\nТовар: {product[1]}\n\nВаш товар:\n{product[5]}")
+    if product[7] == "document":
+        await bot.send_document(callback.from_user.id, document=product[6], caption=f"✅ Спасибо за покупку!\nТовар: {product[2]}")
+    elif product[7] == "video":
+        await bot.send_video(callback.from_user.id, video=product[6], caption=f"✅ Спасибо за покупку!\nТовар: {product[2]}")
+    elif product[7] == "text":
+        await bot.send_message(callback.from_user.id, f"✅ Спасибо за покупку!\n\nТовар: {product[2]}\n\nВаш товар:\n{product[6]}")
 
+# === ПОПОЛНЕНИЕ, ПОДДЕРЖКА И Т.Д. (БЕЗ ИЗМЕНЕНИЙ) ===
 @router.message(F.text == "💰 Пополнить", StateFilter("*"))
 async def topup(message: types.Message, state: FSMContext):
     await state.clear()
@@ -137,7 +152,7 @@ async def topup(message: types.Message, state: FSMContext):
 async def process_topup(message: types.Message, state: FSMContext):
     try:
         amount = float(message.text.replace(",", "."))
-        if amount < 1: # Изменено с 0.01 на 1
+        if amount < 1:
             await message.answer("Минимальная сумма — 1$. Попробуйте снова:")
             return
     except ValueError:
@@ -208,7 +223,7 @@ async def manual_check_payment(callback: types.CallbackQuery):
     else:
         await callback.message.answer(
             f"❌ Оплата пока не найдена.\nСтатус от xRocket: <code>{status}</code>\nID инвойса: <code>{invoice_id}</code>\n\n"
-            f"Если вы точно оплатили, подождите 1-2 минуты. Бот сам пришлет уведомление.",
+            f"Если вы точно оплатили, подождите 1-2 минуты.",
             parse_mode="HTML"
         )
 
@@ -227,10 +242,7 @@ async def poll_payment(invoice_id, client_inv_id, user_id, amount):
             
             user = get_user(user_id)
             if bot:
-                await bot.send_message(
-                    user_id,
-                    f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$"
-                )
+                await bot.send_message(user_id, f"✅ Баланс пополнен на {amount:.2f}$!\nТекущий баланс: {user[2]:.2f}$")
             return
             
         elif status in ("expired", "cancelled"):

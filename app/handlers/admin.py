@@ -5,10 +5,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import AdminStates
-from app.keyboards import admin_kb, main_kb, admin_delete_products_kb
+from app.keyboards import admin_kb, main_kb, admin_categories_kb, admin_category_view_kb
 from app.database import (
     get_user, update_balance, add_product, get_tickets, 
-    reply_ticket, get_all_users, get_db, get_all_products_for_admin, delete_product
+    reply_ticket, get_all_users, get_db, add_category, delete_category, delete_product
 )
 from app.config import ADMIN_IDS
 
@@ -20,15 +20,57 @@ async def admin_panel(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS:
         await message.answer("⛔ Доступ запрещён.")
         return
-    await state.clear() # Сбрасываем возможные зависшие состояния
+    await state.clear()
     await message.answer("🔧 Админ-панель:", reply_markup=admin_kb())
 
-# ДОБАВЛЕН StateFilter("*") ко всем кнопкам!
-@router.message(F.text == "➕ Добавить товар", StateFilter("*"))
-async def add_product_start(message: types.Message, state: FSMContext):
+# ========== ПРОСМОТР КАТАЛОГА (КАТЕГОРИИ) ==========
+@router.message(F.text == "📂 Просмотр каталога", StateFilter("*"))
+async def admin_catalog_view(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
-    await state.clear() # Очищаем старое состояние
-    await message.answer("Введите название товара:")
+    await state.clear()
+    await message.answer("📂 Управление категориями:", reply_markup=admin_categories_kb())
+
+@router.callback_query(F.data == "admin_back_cats")
+async def admin_back_to_cats(callback: types.CallbackQuery):
+    await callback.message.edit_text("📂 Управление категориями:", reply_markup=admin_categories_kb())
+
+@router.callback_query(F.data == "admin_add_cat")
+async def admin_add_category_prompt(callback: types.CallbackQuery, state: FSMContext):
+    await callback.message.answer("Введите название новой категории:")
+    await state.set_state(AdminStates.waiting_category_name)
+
+@router.message(AdminStates.waiting_category_name)
+async def admin_add_category_save(message: types.Message, state: FSMContext):
+    add_category(message.text)
+    await state.clear()
+    await message.answer(f"✅ Категория «{message.text}» добавлена!", reply_markup=admin_kb())
+    await message.answer("📂 Управление категориями:", reply_markup=admin_categories_kb())
+
+@router.callback_query(F.data.startswith("admin_cat_"))
+async def admin_open_category(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split("_")[2])
+    await callback.message.edit_text("📂 Товары в категории:", reply_markup=admin_category_view_kb(cat_id))
+
+@router.callback_query(F.data.startswith("admin_del_cat_"))
+async def admin_delete_category(callback: types.CallbackQuery):
+    cat_id = int(callback.data.split("_")[3])
+    delete_category(cat_id)
+    await callback.answer("Категория и её товары удалены.", show_alert=True)
+    await callback.message.edit_text("📂 Управление категориями:", reply_markup=admin_categories_kb())
+
+@router.callback_query(F.data.startswith("admin_del_prod_"))
+async def admin_delete_product(callback: types.CallbackQuery):
+    _, _, prod_id, cat_id = callback.data.split("_")
+    delete_product(int(prod_id))
+    await callback.answer("Товар удален.", show_alert=True)
+    await callback.message.edit_text("📂 Товары в категории:", reply_markup=admin_category_view_kb(int(cat_id)))
+
+# ========== ДОБАВЛЕНИЕ ТОВАРА (ВНУТРИ КАТЕГОРИИ) ==========
+@router.callback_query(F.data.startswith("admin_add_prod_"))
+async def add_product_start(callback: types.CallbackQuery, state: FSMContext):
+    cat_id = int(callback.data.split("_")[3])
+    await state.update_data(cat_id=cat_id)
+    await callback.message.answer("Введите название товара:")
     await state.set_state(AdminStates.waiting_product_name)
 
 @router.message(AdminStates.waiting_product_name)
@@ -96,64 +138,14 @@ async def add_product_stock(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
     add_product(
-        data["name"], data["desc"], data["price"], 
+        data["cat_id"], data["name"], data["desc"], data["price"], 
         data["photo_id"], data["file_id"], data["file_type"], stock
     )
     await state.clear()
     await message.answer(f"✅ Товар «{data['name']}» добавлен!", reply_markup=admin_kb())
+    await message.answer("📂 Товары в категории:", reply_markup=admin_category_view_kb(data["cat_id"]))
 
-# ========== УДАЛЕНИЕ ТОВАРА ==========
-@router.message(F.text == "🗑 Удалить товар", StateFilter("*"))
-async def admin_delete_product_start(message: types.Message, state: FSMContext):
-    if message.from_user.id not in ADMIN_IDS: return
-    await state.clear()
-        
-    products = get_all_products_for_admin() 
-    
-    if not products:
-        await message.answer("Каталог пуст. Удалять нечего.")
-        return
-        
-    await message.answer(
-        "Выберите товар, который хотите удалить (нажмите на кнопку):",
-        reply_markup=admin_delete_products_kb(products)
-    )
-
-@router.callback_query(F.data.startswith("del_prod_"))
-async def admin_delete_product_confirm(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("Нет доступа", show_alert=True)
-        return
-        
-    product_id = int(callback.data.split("_")[2])
-    
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"confirm_del_{product_id}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_del")
-        ]
-    ])
-    
-    await callback.message.edit_text(
-        "Вы уверены, что хотите удалить этот товар? Это действие нельзя отменить.",
-        reply_markup=kb
-    )
-
-@router.callback_query(F.data.startswith("confirm_del_"))
-async def admin_delete_product_execute(callback: types.CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        return
-        
-    product_id = int(callback.data.split("_")[2])
-    delete_product(product_id)
-    
-    await callback.message.edit_text("✅ Товар успешно удален из базы данных.")
-
-@router.callback_query(F.data == "cancel_del")
-async def admin_delete_product_cancel(callback: types.CallbackQuery):
-    await callback.message.edit_text("Удаление отменено.")
-# ==================================
-
+# ========== ОСТАЛЬНЫЕ ФУНКЦИИ (БАЛАНС, РАССЫЛКА, ТИКЕТЫ) ==========
 @router.message(F.text == "💵 Выдать баланс", StateFilter("*"))
 async def admin_give_balance_start(message: types.Message, state: FSMContext):
     if message.from_user.id not in ADMIN_IDS: return
@@ -171,12 +163,12 @@ async def admin_give_balance_user(message: types.Message, state: FSMContext):
         
     user = get_user(target_id)
     if not user:
-        await message.answer("Пользователь с таким ID не найден в базе. Убедитесь, что он запускал бота.")
+        await message.answer("Пользователь с таким ID не найден в базе.")
         await state.clear()
         return
 
     await state.update_data(target_id=target_id)
-    await message.answer(f"Пользователь найден. Его текущий баланс: {user[2]:.2f}$\nВведите сумму для выдачи:")
+    await message.answer(f"Пользователь найден. Его баланс: {user[2]:.2f}$\nВведите сумму для выдачи:")
     await state.set_state(AdminStates.waiting_balance_amount)
 
 @router.message(AdminStates.waiting_balance_amount)
@@ -197,7 +189,7 @@ async def admin_give_balance_amount(message: types.Message, state: FSMContext):
     updated_user = get_user(target_id)
     
     await message.answer(
-        f"✅ Баланс пользователя {target_id} успешно пополнен на {amount:.2f}$.\n"
+        f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f}$.\n"
         f"Новый баланс: {updated_user[2]:.2f}$",
         reply_markup=admin_kb()
     )
@@ -220,9 +212,7 @@ async def broadcast_start(message: types.Message, state: FSMContext):
 async def broadcast_send(message: types.Message, state: FSMContext):
     await state.clear()
     users = get_all_users()
-    
-    await message.answer(f"⏳ Начинаю фоновую рассылку для {len(users)} пользователей...\nРезультат пришлю сюда.", reply_markup=admin_kb())
-    
+    await message.answer(f"⏳ Начинаю фоновую рассылку для {len(users)} пользователей...", reply_markup=admin_kb())
     if bot:
         task = asyncio.create_task(process_broadcast(bot, message.text, message.from_user.id, users))
         from app.handlers.user import bg_tasks
@@ -230,10 +220,7 @@ async def broadcast_send(message: types.Message, state: FSMContext):
         task.add_done_callback(bg_tasks.discard)
 
 async def process_broadcast(bot_instance, text, admin_id, users):
-    success = 0
-    blocked = 0
-    errors = 0
-    
+    success, blocked, errors = 0, 0, 0
     for uid in users:
         try:
             await bot_instance.send_message(uid, text)
@@ -245,17 +232,10 @@ async def process_broadcast(bot_instance, text, admin_id, users):
                 errors += 1
         await asyncio.sleep(0.1)
 
-    report = (
-        f"✅ <b>Рассылка завершена!</b>\n\n"
-        f"📨 Всего в базе: {len(users)}\n"
-        f"✅ Доставлено: {success}\n"
-        f"🚫 Заблокировали бота: {blocked}\n"
-        f"⚠️ Другие ошибки: {errors}"
-    )
+    report = f"✅ <b>Рассылка завершена!</b>\n\n📨 Всего: {len(users)}\n✅ Доставлено: {success}\n🚫 Блок: {blocked}\n⚠️ Ошибки: {errors}"
     try:
         await bot_instance.send_message(admin_id, report, parse_mode="HTML")
-    except:
-        pass
+    except: pass
 
 @router.message(F.text == "🎫 Тикеты", StateFilter("*"))
 async def list_tickets(message: types.Message, state: FSMContext):
