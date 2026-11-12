@@ -12,29 +12,27 @@ def init_db():
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
     
+    # Добавлена колонка agreed_to_privacy
     c.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, registered_at TEXT
+        user_id INTEGER PRIMARY KEY, username TEXT, balance REAL DEFAULT 0, 
+        registered_at TEXT, agreed_to_privacy INTEGER DEFAULT 0
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT
     )""")
-    
     c.execute("""CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT, description TEXT, price REAL, 
         photo_id TEXT, file_id TEXT, file_type TEXT, stock INTEGER DEFAULT 0
     )""")
-    
     c.execute("""CREATE TABLE IF NOT EXISTS purchases (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, product_id INTEGER, 
         product_name TEXT, price REAL, purchased_at TEXT
     )""")
-    
     c.execute("""CREATE TABLE IF NOT EXISTS tickets (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, message TEXT, 
         status TEXT DEFAULT 'open', admin_reply TEXT, created_at TEXT
     )""")
-    
     c.execute("""CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, invoice_id TEXT, 
         client_invoice_id TEXT, amount REAL, status TEXT DEFAULT 'pending', created_at TEXT
@@ -51,6 +49,23 @@ def register_user(user_id, username):
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO users (user_id, username, registered_at) VALUES (?, ?, ?)",
               (user_id, username, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def check_privacy_agreement(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT agreed_to_privacy FROM users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if not row or row[0] == 0:
+        return False
+    return True
+
+def agree_to_privacy(user_id):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("UPDATE users SET agreed_to_privacy = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 

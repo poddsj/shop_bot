@@ -5,13 +5,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.states import UserStates
-from app.keyboards import main_kb, payment_kb, client_categories_kb, client_products_kb
+from app.keyboards import main_kb, payment_kb, client_categories_kb, client_products_kb, privacy_kb
 from app.database import (
     register_user, get_user, get_purchases, get_products, update_balance,
-    add_purchase, create_ticket, create_payment, get_payment, complete_payment, get_db
+    add_purchase, create_ticket, create_payment, get_payment, complete_payment, get_db,
+    check_privacy_agreement, agree_to_privacy
 )
 from app.services.xrocket import create_xrocket_invoice, check_xrocket_payment
-from app.config import ADMIN_IDS
+from app.config import ADMIN_IDS, PRIVACY_POLICY
 
 router = Router()
 bot = None
@@ -21,20 +22,40 @@ bg_tasks = set()
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
     register_user(message.from_user.id, message.from_user.username or "unknown")
-    await message.answer(
-        "Добро пожаловать в магазин!\n\n"
+    
+    if not check_privacy_agreement(message.from_user.id):
+        await message.answer(
+            PRIVACY_POLICY,
+            parse_mode="HTML",
+            reply_markup=privacy_kb()
+        )
+    else:
+        await message.answer(
+            "Добро пожаловать в магазин!\n\n"
+            "🛍 Каталог — просмотр товаров\n"
+            "👤 Профиль — баланс и история",
+            reply_markup=main_kb()
+        )
+
+@router.callback_query(F.data == "accept_privacy")
+async def process_privacy_accept(callback: types.CallbackQuery, state: FSMContext):
+    agree_to_privacy(callback.from_user.id)
+    await callback.message.delete()
+    await callback.message.answer(
+        "✅ Спасибо! Вы успешно зарегистрированы.\n\n"
         "🛍 Каталог — просмотр товаров\n"
         "👤 Профиль — баланс и история",
         reply_markup=main_kb()
     )
 
+# Проверка при нажатии на кнопки
 @router.message(F.text == "👤 Профиль", StateFilter("*"))
 async def profile(message: types.Message, state: FSMContext):
+    if not check_privacy_agreement(message.from_user.id):
+        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+    
     await state.clear()
     user = get_user(message.from_user.id)
-    if not user:
-        await message.answer("Ошибка: пользователь не найден.")
-        return
     purchases = get_purchases(message.from_user.id)
     history = "\n".join([f"• {p[3]} — {p[4]}$ ({p[5][:10]})" for p in purchases[:10]]) or "Покупок пока нет"
     await message.answer(
@@ -48,6 +69,9 @@ async def profile(message: types.Message, state: FSMContext):
 
 @router.message(F.text == "📦 Мои покупки", StateFilter("*"))
 async def my_purchases(message: types.Message, state: FSMContext):
+    if not check_privacy_agreement(message.from_user.id):
+        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        
     await state.clear()
     purchases = get_purchases(message.from_user.id)
     if not purchases:
@@ -60,6 +84,9 @@ async def my_purchases(message: types.Message, state: FSMContext):
 
 @router.message(F.text == "🛍 Каталог", StateFilter("*"))
 async def catalog(message: types.Message, state: FSMContext):
+    if not check_privacy_agreement(message.from_user.id):
+        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        
     await state.clear()
     kb = client_categories_kb()
     if not kb.inline_keyboard:
@@ -67,6 +94,7 @@ async def catalog(message: types.Message, state: FSMContext):
         return
     await message.answer("🛍 Выберите категорию:", reply_markup=kb)
 
+# Коллбеки для каталога
 @router.callback_query(F.data.startswith("user_cat_"))
 async def user_open_category(callback: types.CallbackQuery):
     cat_id = int(callback.data.split("_")[2])
@@ -141,9 +169,11 @@ async def confirm_buy(callback: types.CallbackQuery):
     elif product[7] == "text":
         await bot.send_message(callback.from_user.id, f"✅ Спасибо за покупку!\n\nТовар: {product[2]}\n\nВаш товар:\n{product[6]}")
 
-# === ПОПОЛНЕНИЕ, ПОДДЕРЖКА И Т.Д. (БЕЗ ИЗМЕНЕНИЙ) ===
 @router.message(F.text == "💰 Пополнить", StateFilter("*"))
 async def topup(message: types.Message, state: FSMContext):
+    if not check_privacy_agreement(message.from_user.id):
+        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        
     await state.clear()
     await message.answer("Введите сумму пополнения в USD (минимум 1$):")
     await state.set_state(UserStates.waiting_topup_amount)
@@ -181,6 +211,8 @@ async def process_topup(message: types.Message, state: FSMContext):
     task = asyncio.create_task(poll_payment(invoice_id, client_inv_id, message.from_user.id, amount))
     bg_tasks.add(task)
     task.add_done_callback(bg_tasks.discard)
+
+# ... (функции check_pay и poll_payment остаются без изменений) ...
 
 @router.callback_query(F.data.startswith("check_pay_"))
 async def manual_check_payment(callback: types.CallbackQuery):
@@ -255,6 +287,9 @@ async def poll_payment(invoice_id, client_inv_id, user_id, amount):
 
 @router.message(F.text == "🆘 Поддержка", StateFilter("*"))
 async def support(message: types.Message, state: FSMContext):
+    if not check_privacy_agreement(message.from_user.id):
+        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        
     await state.clear()
     await message.answer("Опишите вашу проблему — админ ответит вам в этом чате:")
     await state.set_state(UserStates.waiting_support)

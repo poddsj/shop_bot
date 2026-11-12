@@ -15,6 +15,11 @@ def admin_kb():
         [KeyboardButton(text="🔙 Выйти из админки")]
     ], resize_keyboard=True)
 
+def privacy_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Я согласен с политикой", callback_data="accept_privacy")]
+    ])
+
 def payment_kb(invoice_id):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Я оплатил", callback_data=f"check_pay_{invoice_id}")]
