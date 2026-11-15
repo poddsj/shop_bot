@@ -60,10 +60,14 @@ async def admin_delete_category(callback: types.CallbackQuery):
 
 @router.callback_query(F.data.startswith("admin_del_prod_"))
 async def admin_delete_product(callback: types.CallbackQuery):
-    _, _, prod_id, cat_id = callback.data.split("_")
-    delete_product(int(prod_id))
+    # Берем последние два элемента (ID товара и ID категории)
+    parts = callback.data.split("_")
+    prod_id = int(parts[-2])
+    cat_id = int(parts[-1])
+    
+    delete_product(prod_id)
     await callback.answer("Товар удален.", show_alert=True)
-    await callback.message.edit_text("📂 Товары в категории:", reply_markup=admin_category_view_kb(int(cat_id)))
+    await callback.message.edit_text("📂 Товары в категории:", reply_markup=admin_category_view_kb(cat_id))
 
 # ========== ДОБАВЛЕНИЕ ТОВАРА (ВНУТРИ КАТЕГОРИИ) ==========
 @router.callback_query(F.data.startswith("admin_add_prod_"))
