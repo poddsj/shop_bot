@@ -34,9 +34,10 @@ async def start(message: types.Message, state: FSMContext):
         )
     else:
         await message.answer(
-            "Добро пожаловать в магазин!\n\n"
-            "🛍 Каталог — просмотр товаров\n"
-            "👤 Профиль — баланс и история",
+            '<tg-emoji emoji-id="5345827101910016551">👋</tg-emoji> Добро пожаловать в магазин!\n\n'
+            '<tg-emoji emoji-id="5348473175426508545">🛍</tg-emoji> Каталог — просмотр товаров\n'
+            '<tg-emoji emoji-id="5348085180965888383">👤</tg-emoji> Профиль — баланс и история',
+            parse_mode="HTML",
             reply_markup=main_kb()
         )
 

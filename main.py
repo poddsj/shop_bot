@@ -1,11 +1,14 @@
 import asyncio
 import logging
+import os
+import sqlite3
+import tempfile
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import FSInputFile
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from app.config import BOT_TOKEN, ADMIN_IDS
+from app.config import BOT_TOKEN, ADMIN_IDS, DB_PATH
 from app.database import init_db
 from app.handlers import user, admin
 
@@ -32,11 +35,25 @@ async def main():
     async def get_database(message: types.Message):
         if message.from_user.id not in ADMIN_IDS:
             return
+        backup_path = None
         try:
-            db_file = FSInputFile("data/shop.db")
-            await message.answer_document(db_file, caption="📁 Актуальная база данных магазина")
-        except Exception as e:
-            await message.answer(f"❌ Ошибка при отправке базы: {e}")
+            fd, backup_path = tempfile.mkstemp(suffix=".db")
+            os.close(fd)
+            with sqlite3.connect(DB_PATH) as source, sqlite3.connect(backup_path) as backup:
+                source.backup(backup)
+            await message.answer_document(
+                FSInputFile(backup_path, filename="shop-backup.db"),
+                caption="📁 Согласованная резервная копия базы магазина",
+            )
+        except Exception:
+            logging.exception("Failed to create/send database backup")
+            await message.answer("❌ Не удалось создать или отправить резервную копию базы.")
+        finally:
+            if backup_path and os.path.exists(backup_path):
+                try:
+                    os.remove(backup_path)
+                except OSError:
+                    logging.exception("Failed to remove temporary database backup")
     # ---------------------------------------
     
     # Подключаем роутеры (сначала админский, чтобы команды не конфликтовали)
