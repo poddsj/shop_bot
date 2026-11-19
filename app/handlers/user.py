@@ -34,7 +34,7 @@ async def start(message: types.Message, state: FSMContext):
         )
     else:
         await message.answer(
-            '<tg-emoji emoji-id="5345827101910016551">👋</tg-emoji> Добро пожаловать в магазин!\n\n'
+            '<tg-emoji emoji-id="5345827101910016551">👋</tg-emoji> Добро пожаловать в <b>TRINADTAC SHOP</b>!\n\n'
             '<tg-emoji emoji-id="5348473175426508545">🛍</tg-emoji> Каталог — просмотр товаров\n'
             '<tg-emoji emoji-id="5348085180965888383">👤</tg-emoji> Профиль — баланс и история',
             parse_mode="HTML",
@@ -46,9 +46,10 @@ async def process_privacy_accept(callback: types.CallbackQuery, state: FSMContex
     agree_to_privacy(callback.from_user.id)
     await callback.message.delete()
     await callback.message.answer(
-        "✅ Спасибо! Вы успешно зарегистрированы.\n\n"
-        "🛍 Каталог — просмотр товаров\n"
-        "👤 Профиль — баланс и история",
+        '<tg-emoji emoji-id="5348568648254529148">✅</tg-emoji> Спасибо! Вы успешно зарегистрированы.\n\n'
+        '<tg-emoji emoji-id="5348473175426508545">🛍</tg-emoji> Каталог — просмотр товаров\n'
+        '<tg-emoji emoji-id="5348085180965888383">👤</tg-emoji> Профиль — баланс и история',
+        parse_mode="HTML",
         reply_markup=main_kb()
     )
 
@@ -56,25 +57,26 @@ async def process_privacy_accept(callback: types.CallbackQuery, state: FSMContex
 @router.message(F.text == "👤 Профиль", StateFilter("*"))
 async def profile(message: types.Message, state: FSMContext):
     if not check_privacy_agreement(message.from_user.id):
-        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        return await message.answer('<tg-emoji emoji-id="5348518573230833874">⚠️</tg-emoji> Сначала примите политику!', reply_markup=privacy_kb(), parse_mode="HTML")
     
     await state.clear()
     user = get_user(message.from_user.id)
     purchases = get_purchases(message.from_user.id)
     history = "\n".join([f"• {p[3]} — {p[4]}$ ({p[5][:10]})" for p in purchases[:10]]) or "Покупок пока нет"
     await message.answer(
-        f"👤 Ваш профиль\n\n"
+        f'<tg-emoji emoji-id="5348085180965888383">👤</tg-emoji> Ваш профиль:\n\n'
         f"ID: {user[0]}\n"
         f"Username: @{user[1] or 'не указан'}\n"
-        f"💰 Баланс: {user[2]:.2f} $\n\n"
-        f"📦 Последние покупки:\n{history}",
+        f'<tg-emoji emoji-id="5348042428861427522">💰</tg-emoji> Баланс: {user[2]:.2f} $\n\n'
+        f'<tg-emoji emoji-id="5346047231868842344">📦</tg-emoji> Последние покупки:\n{history}',
+        parse_mode="HTML",
         reply_markup=main_kb()
     )
 
 @router.message(F.text == "📦 Мои покупки", StateFilter("*"))
 async def my_purchases(message: types.Message, state: FSMContext):
     if not check_privacy_agreement(message.from_user.id):
-        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        return await message.answer('<tg-emoji emoji-id="5348518573230833874">⚠️</tg-emoji> Сначала примите политику!', reply_markup=privacy_kb(), parse_mode="HTML")
         
     await state.clear()
     purchases = get_purchases(message.from_user.id)
@@ -89,7 +91,7 @@ async def my_purchases(message: types.Message, state: FSMContext):
 @router.message(F.text == "🛍 Каталог", StateFilter("*"))
 async def catalog(message: types.Message, state: FSMContext):
     if not check_privacy_agreement(message.from_user.id):
-        return await message.answer("⚠️ Сначала примите политику.", reply_markup=privacy_kb())
+        return await message.answer('<tg-emoji emoji-id="5348518573230833874">⚠️</tg-emoji> Сначала примите политику!', reply_markup=privacy_kb(), parse_mode="HTML")
         
     await state.clear()
     kb = client_categories_kb()
