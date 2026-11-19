@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from aiogram import Router, types, F
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
@@ -13,6 +14,9 @@ from app.database import (
 from app.config import ADMIN_IDS
 
 router = Router()
+# Every message/callback handled by this router requires an admin Telegram ID.
+router.message.filter(F.from_user.id.in_(ADMIN_IDS))
+router.callback_query.filter(F.from_user.id.in_(ADMIN_IDS))
 bot = None
 
 @router.message(Command("admin"))
@@ -48,12 +52,20 @@ async def admin_add_category_save(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_cat_"))
 async def admin_open_category(callback: types.CallbackQuery):
-    cat_id = int(callback.data.split("_")[2])
+    try:
+        cat_id = int(callback.data.split("_")[2])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная категория", show_alert=True)
+        return
     await callback.message.edit_text("📂 Товары в категории:", reply_markup=admin_category_view_kb(cat_id))
 
 @router.callback_query(F.data.startswith("admin_del_cat_"))
 async def admin_delete_category(callback: types.CallbackQuery):
-    cat_id = int(callback.data.split("_")[3])
+    try:
+        cat_id = int(callback.data.split("_")[3])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная категория", show_alert=True)
+        return
     delete_category(cat_id)
     await callback.answer("Категория и её товары удалены.", show_alert=True)
     await callback.message.edit_text("📂 Управление категориями:", reply_markup=admin_categories_kb())
@@ -62,8 +74,12 @@ async def admin_delete_category(callback: types.CallbackQuery):
 async def admin_delete_product(callback: types.CallbackQuery):
     # Берем последние два элемента (ID товара и ID категории)
     parts = callback.data.split("_")
-    prod_id = int(parts[-2])
-    cat_id = int(parts[-1])
+    try:
+        prod_id = int(parts[-2])
+        cat_id = int(parts[-1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный товар", show_alert=True)
+        return
     
     delete_product(prod_id)
     await callback.answer("Товар удален.", show_alert=True)
@@ -72,7 +88,11 @@ async def admin_delete_product(callback: types.CallbackQuery):
 # ========== ДОБАВЛЕНИЕ ТОВАРА (ВНУТРИ КАТЕГОРИИ) ==========
 @router.callback_query(F.data.startswith("admin_add_prod_"))
 async def add_product_start(callback: types.CallbackQuery, state: FSMContext):
-    cat_id = int(callback.data.split("_")[3])
+    try:
+        cat_id = int(callback.data.split("_")[3])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная категория", show_alert=True)
+        return
     await state.update_data(cat_id=cat_id)
     await callback.message.answer("Введите название товара:")
     await state.set_state(AdminStates.waiting_product_name)
@@ -92,8 +112,12 @@ async def add_product_desc(message: types.Message, state: FSMContext):
 @router.message(AdminStates.waiting_product_price)
 async def add_product_price(message: types.Message, state: FSMContext):
     try:
-        price = float(message.text.replace(",", "."))
-    except ValueError:
+        decimal_price = Decimal(message.text.replace(",", ".").strip()).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if not decimal_price.is_finite() or decimal_price < Decimal("0.01") or decimal_price > Decimal("100000"):
+            await message.answer("Цена должна быть от 0.01$ до 100000$:")
+            return
+        price = float(decimal_price)
+    except (InvalidOperation, ValueError, AttributeError):
         await message.answer("Введите число:")
         return
     await state.update_data(price=price)
@@ -136,7 +160,10 @@ async def add_product_file(message: types.Message, state: FSMContext):
 async def add_product_stock(message: types.Message, state: FSMContext):
     try:
         stock = int(message.text)
-    except ValueError:
+        if stock < 0 or stock > 1000000:
+            await message.answer("Остаток должен быть от 0 до 1000000:")
+            return
+    except (ValueError, TypeError):
         await message.answer("Введите целое число:")
         return
     data = await state.get_data()
@@ -178,11 +205,12 @@ async def admin_give_balance_user(message: types.Message, state: FSMContext):
 @router.message(AdminStates.waiting_balance_amount)
 async def admin_give_balance_amount(message: types.Message, state: FSMContext):
     try:
-        amount = float(message.text.replace(",", "."))
-        if amount <= 0:
-            await message.answer("Сумма должна быть больше нуля.")
+        decimal_amount = Decimal(message.text.replace(",", ".").strip()).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if not decimal_amount.is_finite() or decimal_amount <= 0 or decimal_amount > Decimal("1000000"):
+            await message.answer("Сумма должна быть больше нуля и не больше 1000000$.")
             return
-    except ValueError:
+        amount = float(decimal_amount)
+    except (InvalidOperation, ValueError, AttributeError):
         await message.answer("Введите число.")
         return
 
@@ -259,7 +287,11 @@ async def list_tickets(message: types.Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("reply_"))
 async def reply_ticket_start(callback: types.CallbackQuery, state: FSMContext):
-    ticket_id = int(callback.data.split("_")[1])
+    try:
+        ticket_id = int(callback.data.split("_")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректный тикет", show_alert=True)
+        return
     await state.update_data(ticket_id=ticket_id)
     await callback.message.answer("Введите ответ для пользователя:")
     await state.set_state(AdminStates.waiting_ticket_reply)
@@ -269,10 +301,17 @@ async def reply_ticket_send(message: types.Message, state: FSMContext):
     data = await state.get_data()
     ticket_id = data["ticket_id"]
     conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM tickets WHERE id = ?", (ticket_id,))
-    user_id = c.fetchone()[0]
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM tickets WHERE id = ?", (ticket_id,))
+        row = c.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        await message.answer("Тикет уже не найден.", reply_markup=admin_kb())
+        await state.clear()
+        return
+    user_id = row[0]
     reply_ticket(ticket_id, message.text)
     
     if bot:
